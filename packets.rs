@@ -1,7 +1,7 @@
 use std::io::{Result, Error, ErrorKind, BufReader, BufWriter, Read, Write};
 use core::str::from_utf8;
 use core::ops::Range;
-use super::{U8, U32, Cipher, StreamCipher, Context as HMAC};
+use super::{U8, U32, Cipher, StreamCipher, HMAC};
 
 fn too_short() -> Error {
     Error::new(ErrorKind::UnexpectedEof, "Missing Bytes / Input Too Short")
@@ -424,7 +424,7 @@ impl<R: Read> PacketReader<R> {
                 let (packet, packet_hmac) = self.packet.split_at(packet_length + U32);
                 hmac.update(packet);
 
-                if packet_hmac != hmac.sign().as_ref() {
+                if packet_hmac != &hmac.finalize() {
                     return Err(Error::new(ErrorKind::InvalidData, "Incorrect Packet Mac"));
                 }
             }
@@ -505,7 +505,7 @@ impl<W: Write> PacketWriter<W> {
 
             // encrypt then push hmac
             encryptor.apply_keystream(&mut self.packet);
-            self.packet.extend_from_slice(hmac.sign().as_ref());
+            self.packet.extend_from_slice(&hmac.finalize());
         }
 
         self.packet_number = self.packet_number.wrapping_add(1);

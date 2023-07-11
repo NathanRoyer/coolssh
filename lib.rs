@@ -10,7 +10,7 @@ use core::mem::size_of;
 use rand_core::OsRng;
 use ed25519_dalek::Verifier;
 use aes::cipher::{KeyIvInit, StreamCipher};
-use ring::hmac::{Context, Key};
+use hmac_sha256::HMAC;
 
 type Cipher = ctr::Ctr64BE<aes::Aes256>;
 
@@ -188,10 +188,8 @@ impl Connection {
         let c2s_hmac: [u8; 32] = kex_output_32(b'E')?;
         let s2c_hmac: [u8; 32] = kex_output_32(b'F')?;
 
-        let hmac = |key| Context::with_key(&Key::new(ring::hmac::HMAC_SHA256, key));
-
-        writer.set_encryptor(Cipher::new(&c2s_key.into(), &c2s_iv.into()), hmac(&c2s_hmac), 32);
-        reader.set_decryptor(Cipher::new(&s2c_key.into(), &s2c_iv.into()), hmac(&s2c_hmac), 32, 32);
+        writer.set_encryptor(Cipher::new(&c2s_key.into(), &c2s_iv.into()), HMAC::new(&c2s_hmac), 32);
+        reader.set_decryptor(Cipher::new(&s2c_key.into(), &s2c_iv.into()), HMAC::new(&s2c_hmac), 32, 32);
 
         println!("Sending ServiceRequest");
 
@@ -229,9 +227,9 @@ impl Run {
 }
 
 fn sha256<'b, P: ParseDump<'b>>(data: &P) -> Result<[u8; 32]> {
-    use ring::digest;
+    use hmac_sha256::Hash;
 
-    struct Wrapper(digest::Context);
+    struct Wrapper(Hash);
     impl Write for Wrapper {
         fn flush(&mut self) -> Result<()> { Ok(()) }
         fn write(&mut self, buf: &[u8]) -> Result<usize> {
@@ -240,12 +238,10 @@ fn sha256<'b, P: ParseDump<'b>>(data: &P) -> Result<[u8; 32]> {
         }
     }
 
-    let mut hasher = Wrapper(digest::Context::new(&digest::SHA256));
+    let mut hasher = Wrapper(Hash::new());
     data.dump(&mut hasher)?;
 
-    let mut out = [0; 32];
-    out.copy_from_slice(hasher.0.finish().as_ref());
-    Ok(out)
+    Ok(hasher.0.finalize())
 }
 
 fn key_exchange_output<const N: usize>(
