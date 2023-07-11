@@ -9,7 +9,6 @@ keywords = [ "ssh" ]
 repository = "https://github.com/NathanRoyer/tinyssh"
 
 [lib]
-path = "lib.rs"
 
 [dependencies]
 x25519-dalek = "1.2.0"

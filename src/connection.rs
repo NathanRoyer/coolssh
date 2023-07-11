@@ -1,35 +1,15 @@
-//! SSH 2.0 Client
-
-#![allow(dead_code)]
-
-use std::io::{Result, Error, ErrorKind, BufReader, BufWriter, BufRead, Write};
-use std::net::{TcpStream, ToSocketAddrs};
-use std::format;
-use core::mem::size_of;
-
-use rand_core::OsRng;
-use ed25519_dalek::Verifier;
-use aes::cipher::{KeyIvInit, StreamCipher};
-use hmac_sha256::HMAC;
-
-type Cipher = ctr::Ctr64BE<aes::Aes256>;
-
-const VERSION_HEADER: &'static [u8] = b"SSH-2.0-tinyssh+1.0";
-const U32: usize = size_of::<u32>();
-const U8: usize = size_of::<u8>();
-
-pub mod packets;
-use packets::{
-    PacketReader, PacketWriter, ParseDump, UnsignedMpInt, /* Message, */
-    Kexinit, KexdhInit, KexdhReply, ExchangeHash, Unknown1, Newkeys,
-    BaseKeyMaterial, ExtKeyMaterial, ServiceRequest, ServiceAccept,
+use super::{
+    Result, Error, ErrorKind, Write,
+    TcpStream, ToSocketAddrs, BufReader, BufWriter, BufRead,
+    Cipher, HMAC, VERSION_HEADER, Rng, sha256, Run,
 };
-
-pub struct Connection {
-    reader: PacketReader<TcpStream>,
-    writer: PacketWriter<TcpStream>,
-    peer_version: String,
-}
+use super::{KeyIvInit, Verifier};
+use super::messages::{
+    Kexinit, KexdhInit, KexdhReply, ExchangeHash, Unknown1, Newkeys,
+    UnsignedMpInt, ServiceRequest, ServiceAccept,
+};
+use super::parsedump::ParseDump;
+use super::packets::{PacketReader, PacketWriter};
 
 pub enum Creds<'a> {
     Password {
@@ -40,6 +20,12 @@ pub enum Creds<'a> {
         username: &'a str,
         priv_key: &'a [u8],
     }
+}
+
+pub struct Connection {
+    reader: PacketReader<TcpStream>,
+    writer: PacketWriter<TcpStream>,
+    peer_version: String,
 }
 
 impl Connection {
@@ -106,7 +92,7 @@ impl Connection {
         let (server_kexinit, _) = Kexinit::parse(server_kexinit_payload)?;
         server_kexinit.check_compat(&client_kexinit)?;
 
-        let secret_key = x25519_dalek::EphemeralSecret::new(OsRng);
+        let secret_key = x25519_dalek::EphemeralSecret::new(Rng);
         let public_key = x25519_dalek::PublicKey::from(&secret_key);
         let client_ephemeral_pubkey = public_key.as_bytes().as_slice();
 
@@ -167,29 +153,14 @@ impl Connection {
 
         let session_id = exchange_hash;
 
-        println!("session_id: {:?}", session_id);
-
         writer.send(&Newkeys {})?;
         let _: Newkeys = reader.recv()?;
 
         println!("Got server Newkeys");
 
-        let mut dumped_shared_secret = Vec::new();
-        shared_secret.dump(&mut dumped_shared_secret)?;
-        let dumped_shared_secret = dumped_shared_secret.as_slice();
-
-        let kex_output_16 = |magic_byte| key_exchange_output(dumped_shared_secret, &exchange_hash, &session_id, magic_byte);
-        let c2s_iv:   [u8; 16] = kex_output_16(b'A')?;
-        let s2c_iv:   [u8; 16] = kex_output_16(b'B')?;
-
-        let kex_output_32 = |magic_byte| key_exchange_output(dumped_shared_secret, &exchange_hash, &session_id, magic_byte);
-        let c2s_key:  [u8; 32] = kex_output_32(b'C')?;
-        let s2c_key:  [u8; 32] = kex_output_32(b'D')?;
-        let c2s_hmac: [u8; 32] = kex_output_32(b'E')?;
-        let s2c_hmac: [u8; 32] = kex_output_32(b'F')?;
-
-        writer.set_encryptor(Cipher::new(&c2s_key.into(), &c2s_iv.into()), HMAC::new(&c2s_hmac), 32);
-        reader.set_decryptor(Cipher::new(&s2c_key.into(), &s2c_iv.into()), HMAC::new(&s2c_hmac), 32, 32);
+        let kex = KeyExchangeOutput::new(shared_secret, &exchange_hash, &session_id)?;
+        writer.set_encryptor(Cipher::new(&kex.c2s_key.into(), &kex.c2s_iv.into()), HMAC::new(&kex.c2s_hmac), 32);
+        reader.set_decryptor(Cipher::new(&kex.s2c_key.into(), &kex.s2c_iv.into()), HMAC::new(&kex.s2c_hmac), 32, 32);
 
         println!("Sending ServiceRequest");
 
@@ -216,72 +187,73 @@ impl Connection {
     }
 }
 
-pub struct Run {
-    conn: Connection,
+pub struct KeyExchangeOutput {
+    c2s_iv:   [u8; 16],
+    s2c_iv:   [u8; 16],
+    c2s_key:  [u8; 32],
+    s2c_key:  [u8; 32],
+    c2s_hmac: [u8; 32],
+    s2c_hmac: [u8; 32],
 }
 
-impl Run {
-    pub fn stop(self) -> Connection {
-        self.conn
-    }
-}
+impl KeyExchangeOutput {
+    fn fill_array<const N: usize>(
+        dumped_shared_secret: &[u8],
+        exchange_hash: &[u8],
+        session_id: &[u8],
+        magic_byte: u8,
+    ) -> Result<[u8; N]> {
+        let mut out_key = [0u8; N];
+        let mut progress = 0;
 
-fn sha256<'b, P: ParseDump<'b>>(data: &P) -> Result<[u8; 32]> {
-    use hmac_sha256::Hash;
+        let mut appendage = sha256(&[
+            dumped_shared_secret,
+            exchange_hash,
+            &[magic_byte],
+            session_id,
+        ].as_slice())?;
 
-    struct Wrapper(Hash);
-    impl Write for Wrapper {
-        fn flush(&mut self) -> Result<()> { Ok(()) }
-        fn write(&mut self, buf: &[u8]) -> Result<usize> {
-            self.0.update(buf);
-            Ok(buf.len())
+        loop {
+            let len = appendage.len().min(N - progress);
+            out_key[progress..][..len].copy_from_slice(&appendage[..len]);
+            progress += len;
+
+            if progress != N {
+                appendage = sha256(&[
+                    dumped_shared_secret,
+                    exchange_hash,
+                    &out_key[..progress],
+                ].as_slice())?;
+            } else {
+                break;
+            }
         }
+
+        Ok(out_key)
     }
 
-    let mut hasher = Wrapper(Hash::new());
-    data.dump(&mut hasher)?;
+    pub fn new(shared_secret: UnsignedMpInt, exchange_hash: &[u8], session_id: &[u8]) -> Result<Self> {
+        let mut dumped_shared_secret = Vec::new();
+        shared_secret.dump(&mut dumped_shared_secret)?;
+        let dumped_shared_secret = dumped_shared_secret.as_slice();
 
-    Ok(hasher.0.finalize())
-}
+        let kex_output_16 = |magic_byte| Self::fill_array(dumped_shared_secret, exchange_hash, session_id, magic_byte);
+        let c2s_iv:   [u8; 16] = kex_output_16(b'A')?;
+        let s2c_iv:   [u8; 16] = kex_output_16(b'B')?;
 
-fn key_exchange_output<const N: usize>(
-    dumped_shared_secret: &[u8],
-    exchange_hash: &[u8],
-    session_id: &[u8],
-    magic_byte: u8,
-) -> Result<[u8; N]> {
-    let mut out_key = [0u8; N];
-    let mut progress = 0;
+        let kex_output_32 = |magic_byte| Self::fill_array(dumped_shared_secret, exchange_hash, session_id, magic_byte);
+        let c2s_key:  [u8; 32] = kex_output_32(b'C')?;
+        let s2c_key:  [u8; 32] = kex_output_32(b'D')?;
+        let c2s_hmac: [u8; 32] = kex_output_32(b'E')?;
+        let s2c_hmac: [u8; 32] = kex_output_32(b'F')?;
 
-    let mut appendage = sha256(&[
-        dumped_shared_secret,
-        exchange_hash,
-        &[magic_byte],
-        session_id,
-    ].as_slice())?;
-
-    loop {
-        let len = appendage.len().min(N - progress);
-        out_key[progress..][..len].copy_from_slice(&appendage[..len]);
-        progress += len;
-
-        if progress != N {
-            appendage = sha256(&[
-                dumped_shared_secret,
-                exchange_hash,
-                &out_key[..progress],
-            ].as_slice())?;
-        } else {
-            break;
-        }
-    }
-
-    Ok(out_key)
-}
-
-#[test]
-fn connection() {
-    if let Err(error) = Connection::connect("github.com:22", Creds::Password { username: "", password: "" }) {
-        println!("{:#?}", error);
+        Ok(Self {
+            c2s_iv,
+            s2c_iv,
+            c2s_key,
+            s2c_key,
+            c2s_hmac,
+            s2c_hmac,
+        })
     }
 }
