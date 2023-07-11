@@ -668,6 +668,27 @@ impl<'b> ParseDump<'b> for DisconnectReasonCode {
     }
 }
 
+impl<'a> Kexinit<'a> {
+    pub fn check_compat(&self, client: &Self) -> Result<()> {
+        fn find(haystack: &str, needle: &str) -> Result<()> {
+            let errmsg = "Couldn't agree with peer on an algorithm set";
+            match haystack.split(",").position(|alg| alg == needle) {
+                None => Err(Error::new(ErrorKind::Unsupported, errmsg)),
+                Some(_) => Ok(()),
+            }
+        }
+
+        find(self.kex_algorithms, client.kex_algorithms)?;
+        find(self.server_host_key_algorithms, client.server_host_key_algorithms)?;
+        find(self.encryption_algorithms_client_to_server, client.encryption_algorithms_client_to_server)?;
+        find(self.encryption_algorithms_server_to_client, client.encryption_algorithms_server_to_client)?;
+        find(self.mac_algorithms_client_to_server, client.mac_algorithms_client_to_server)?;
+        find(self.mac_algorithms_server_to_client, client.mac_algorithms_server_to_client)?;
+        find(self.compression_algorithms_client_to_server, client.compression_algorithms_client_to_server)?;
+        find(self.compression_algorithms_server_to_client, client.compression_algorithms_server_to_client)
+    }
+}
+
 fn try_get<const N: usize>(src: &[u8]) -> Result<[u8; N]> {
     let mut dst = [0; N];
     dst.copy_from_slice(src.get(..N).ok_or_else(|| too_short())?);

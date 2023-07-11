@@ -103,8 +103,8 @@ impl Connection {
 
         let server_kexinit_payload = reader.recv_raw()?.to_vec();
         let server_kexinit_payload = &server_kexinit_payload.into_boxed_slice();
-        let (_server_kexinit, _) = Kexinit::parse(server_kexinit_payload)?;
-        println!("{:#?}", _server_kexinit);
+        let (server_kexinit, _) = Kexinit::parse(server_kexinit_payload)?;
+        server_kexinit.check_compat(&client_kexinit)?;
 
         let secret_key = x25519_dalek::EphemeralSecret::new(OsRng);
         let public_key = x25519_dalek::PublicKey::from(&secret_key);
