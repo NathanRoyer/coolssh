@@ -1,4 +1,30 @@
 //! Minimal SSH 2.0 Client
+//! 
+//! ### Example: Initiating a fetch from github
+//! 
+//! ```rust
+//! let github_account_id = "john.doe@gmail.com";
+//! let (openssh_encoded_pubkey, keypair) = create_ed25519_keypair(github_account_id);
+//! 
+//! println!("{}", openssh_encoded_pubkey);
+//! // Add this public key to `authorized_keys` on your server
+//! // -> https://github.com/settings/keys
+//! 
+//! let stream = TcpStream::connect("github.com:22").unwrap();
+//! let mut conn = Connection::new(stream, ("git", &keypair).into()).unwrap();
+//! 
+//! // set appropriate timeout (preferably after authentication):
+//! conn.mutate_stream(|stream| {
+//!     let duration = std::time::Duration::from_millis(200);
+//!     stream.set_read_timeout(Some(duration)).unwrap()
+//! });
+//! 
+//! let run = conn.run("git-upload-pack rust-lang/rust.git").unwrap();
+//! ```
+//! 
+//! ### Note
+//! 
+//! With few modifications, you can implement a server from this code.
 
 #![allow(dead_code)]
 
@@ -18,16 +44,19 @@ const VERSION_HEADER: &'static [u8] = b"SSH-2.0-tinyssh+1.0";
 const U32: usize = size_of::<u32>();
 const U8: usize = size_of::<u8>();
 
-pub mod connection;
-pub mod parsedump;
-pub mod userauth;
-pub mod channelrequest;
-pub mod messages;
-pub mod packets;
-pub mod run;
+mod connection;
+mod parsedump;
+mod userauth;
+mod channelrequest;
+mod messages;
+mod packets;
+mod run;
 
 #[doc(inline)]
-pub use connection::{Connection, Auth};
+pub use {
+    connection::{Connection, Auth},
+    run::{Run, RunResult, RunEvent, ExitStatus},
+};
 
 fn sha256<'b, P: parsedump::ParseDump<'b>>(data: &P) -> Result<[u8; 32]> {
     use hmac_sha256::Hash;
