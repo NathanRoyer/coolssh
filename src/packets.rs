@@ -4,11 +4,11 @@ use super::{
     BufReader, BufWriter, Cipher, HMAC,
 };
 use super::StreamCipher;
-use super::messages::MessageType;
+use super::messages::{MessageType, GlobalRequest};
 use super::parsedump::{ParseDump, try_u32};
 
 pub struct PacketReader<R: Read> {
-    inner: BufReader<R>,
+    pub(crate) inner: BufReader<R>,
     packet: Vec<u8>,
     packet_number: u32,
     negociated: Option<(Cipher, HMAC)>,
@@ -90,12 +90,23 @@ impl<R: Read> PacketReader<R> {
 
             self.packet_number = self.packet_number.wrapping_add(1);
 
-            let some_ignore_msg = Some(&(MessageType::Ignore as u8));
-            if self.packet.get(payload_offset) != some_ignore_msg {
-                Ok(&self.packet[payload_offset..][..payload_length])
-            } else {
-                // skip, receive next packet
-                self.recv_raw()
+            let range = payload_offset..(payload_offset + payload_length);
+            let msg_type = self.packet[payload_offset];
+            let msg_type = MessageType::try_from(msg_type)?;
+            match msg_type {
+                MessageType::Ignore => self.recv_raw(),
+                MessageType::GlobalRequest => {
+                    // THIS FILTERS OUT GLOBAL REQUESTS WITHOUT `want_reply`
+                    let (global_req, _) = GlobalRequest::parse(&self.packet[range.clone()])?;
+                    match global_req.want_reply {
+                        true => Ok(&self.packet[range]),
+                        false => {
+                            log::info!("Ignoring global request (type = {})", global_req.request_name);
+                            self.recv_raw()
+                        },
+                    }
+                },
+                _ => Ok(&self.packet[range]),
             }
         } else {
             Err(Error::new(ErrorKind::UnexpectedEof, "Invalid packet_length"))

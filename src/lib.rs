@@ -3,7 +3,7 @@
 #![allow(dead_code)]
 
 use std::io::{Result, Error, ErrorKind, BufReader, BufWriter, BufRead, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::TcpStream;
 use core::mem::size_of;
 
 use rand_core::OsRng as Rng;
@@ -21,21 +21,13 @@ const U8: usize = size_of::<u8>();
 pub mod connection;
 pub mod parsedump;
 pub mod userauth;
+pub mod channelrequest;
 pub mod messages;
 pub mod packets;
+pub mod run;
 
 #[doc(inline)]
 pub use connection::{Connection, Auth};
-
-pub struct Run {
-    conn: Connection,
-}
-
-impl Run {
-    pub fn stop(self) -> Connection {
-        self.conn
-    }
-}
 
 fn sha256<'b, P: parsedump::ParseDump<'b>>(data: &P) -> Result<[u8; 32]> {
     use hmac_sha256::Hash;

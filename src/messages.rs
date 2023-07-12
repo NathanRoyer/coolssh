@@ -1,8 +1,12 @@
 use super::{Result, Error, ErrorKind, Write, U8, U32};
 use super::parse_dump_struct;
 use super::parsedump::{ParseDump, too_short, try_u32};
-use super::userauth::UserauthRequest;
+pub use super::userauth::UserauthRequest;
+pub use super::channelrequest::ChannelRequest;
 
+// Use with caution: copy-pasting
+// and leaving the wrong variant name
+// can lead to stack overflow
 #[doc(hidden)]
 #[macro_export]
 macro_rules! check_msg_type {
@@ -33,20 +37,20 @@ pub enum Message<'a> {
     UserauthFailure(UserauthFailure<'a>),
     UserauthSuccess(UserauthSuccess),
     UserauthPkOk(UserauthPkOk<'a>),
-    GlobalRequest,
+    GlobalRequest(GlobalRequest<'a>),
     RequestSuccess,
     RequestFailure,
-    ChannelOpen,
-    ChannelOpenConfirmation,
-    ChannelOpenFailure,
+    ChannelOpen(ChannelOpen<'a>),
+    ChannelOpenConfirmation(ChannelOpenConfirmation),
+    ChannelOpenFailure(ChannelOpenFailure<'a>),
     ChannelWindowAdjust,
-    ChannelData,
-    ChannelExtendedData,
-    ChannelEof,
-    ChannelClose,
-    ChannelRequest,
-    ChannelSuccess,
-    ChannelFailure,
+    ChannelData(ChannelData<'a>),
+    ChannelExtendedData(ChannelExtendedData<'a>),
+    ChannelEof(ChannelEof),
+    ChannelClose(ChannelClose),
+    ChannelRequest(ChannelRequest<'a>),
+    ChannelSuccess(ChannelSuccess),
+    ChannelFailure(ChannelFailure),
 }
 
 parse_dump_struct!(Unimplemented {
@@ -107,6 +111,59 @@ parse_dump_struct!(UserauthFailure<'a> {
     partial_success: bool,
 });
 
+parse_dump_struct!(ChannelOpen<'a> {
+    channel_type: &'a str,
+    client_channel: u32,
+    client_initial_window_size: u32,
+    client_max_packet_size: u32,
+});
+
+parse_dump_struct!(ChannelOpenConfirmation {
+    client_channel: u32,
+    server_channel: u32,
+    server_initial_window_size: u32,
+    server_max_packet_size: u32,
+});
+
+parse_dump_struct!(ChannelOpenFailure<'a> {
+    client_channel: u32,
+    reason_code: u32,
+    description: &'a str,
+    language_tag: &'a str,
+});
+
+parse_dump_struct!(ChannelData<'a> {
+    recipient_channel: u32,
+    data: &'a [u8],
+});
+
+parse_dump_struct!(ChannelExtendedData<'a> {
+    recipient_channel: u32,
+    data_type: u32,
+    data: &'a [u8],
+});
+
+parse_dump_struct!(ChannelEof {
+    recipient_channel: u32,
+});
+
+parse_dump_struct!(ChannelClose {
+    recipient_channel: u32,
+});
+
+parse_dump_struct!(ChannelSuccess {
+    recipient_channel: u32,
+});
+
+parse_dump_struct!(ChannelFailure {
+    recipient_channel: u32,
+});
+
+parse_dump_struct!(GlobalRequest<'a> {
+    request_name: &'a str,
+    want_reply: bool,
+});
+
 // utils, not messages:
 
 parse_dump_struct!(ExchangeHash<'a> {
@@ -147,6 +204,17 @@ impl<'a, 'b: 'a> ParseDump<'b> for Message<'a> {
             MessageType::UserauthFailure => forward_and_wrap!(UserauthFailure, bytes),
             MessageType::UserauthSuccess => forward_and_wrap!(UserauthSuccess, bytes),
             MessageType::UserauthPkOk => forward_and_wrap!(UserauthPkOk, bytes),
+            MessageType::ChannelOpen => forward_and_wrap!(ChannelOpen, bytes),
+            MessageType::ChannelOpenConfirmation => forward_and_wrap!(ChannelOpenConfirmation, bytes),
+            MessageType::ChannelOpenFailure => forward_and_wrap!(ChannelOpenFailure, bytes),
+            MessageType::ChannelData => forward_and_wrap!(ChannelData, bytes),
+            MessageType::ChannelExtendedData => forward_and_wrap!(ChannelExtendedData, bytes),
+            MessageType::ChannelEof => forward_and_wrap!(ChannelEof, bytes),
+            MessageType::ChannelClose => forward_and_wrap!(ChannelClose, bytes),
+            MessageType::ChannelSuccess => forward_and_wrap!(ChannelSuccess, bytes),
+            MessageType::ChannelFailure => forward_and_wrap!(ChannelFailure, bytes),
+            MessageType::ChannelRequest => forward_and_wrap!(ChannelRequest, bytes),
+            MessageType::GlobalRequest => forward_and_wrap!(GlobalRequest, bytes),
 
             typ => Err(Error::new(ErrorKind::InvalidData, format!("Unimplemented Message Type: {:?}", typ))),
         }
@@ -179,20 +247,20 @@ impl<'a> Message<'a> {
             Self::UserauthFailure(_) => MessageType::UserauthFailure,
             Self::UserauthSuccess(_) => MessageType::UserauthSuccess,
             Self::UserauthPkOk(_) => MessageType::UserauthPkOk,
-            Self::GlobalRequest => MessageType::GlobalRequest,
+            Self::GlobalRequest(_) => MessageType::GlobalRequest,
             Self::RequestSuccess => MessageType::RequestSuccess,
             Self::RequestFailure => MessageType::RequestFailure,
-            Self::ChannelOpen => MessageType::ChannelOpen,
-            Self::ChannelOpenConfirmation => MessageType::ChannelOpenConfirmation,
-            Self::ChannelOpenFailure => MessageType::ChannelOpenFailure,
+            Self::ChannelOpen(_) => MessageType::ChannelOpen,
+            Self::ChannelOpenConfirmation(_) => MessageType::ChannelOpenConfirmation,
+            Self::ChannelOpenFailure(_) => MessageType::ChannelOpenFailure,
             Self::ChannelWindowAdjust => MessageType::ChannelWindowAdjust,
-            Self::ChannelData => MessageType::ChannelData,
-            Self::ChannelExtendedData => MessageType::ChannelExtendedData,
-            Self::ChannelEof => MessageType::ChannelEof,
-            Self::ChannelClose => MessageType::ChannelClose,
-            Self::ChannelRequest => MessageType::ChannelRequest,
-            Self::ChannelSuccess => MessageType::ChannelSuccess,
-            Self::ChannelFailure => MessageType::ChannelFailure,
+            Self::ChannelData(_) => MessageType::ChannelData,
+            Self::ChannelExtendedData(_) => MessageType::ChannelExtendedData,
+            Self::ChannelEof(_) => MessageType::ChannelEof,
+            Self::ChannelClose(_) => MessageType::ChannelClose,
+            Self::ChannelRequest(_) => MessageType::ChannelRequest,
+            Self::ChannelSuccess(_) => MessageType::ChannelSuccess,
+            Self::ChannelFailure(_) => MessageType::ChannelFailure,
         }
     }
 }
@@ -260,7 +328,10 @@ impl MessageType {
             b"ChannelExtendedData" => Some(Self::ChannelExtendedData),
             b"ChannelEof" => Some(Self::ChannelEof),
             b"ChannelClose" => Some(Self::ChannelClose),
+
+            // hack: this allows ChannelRequestExec to dump the correct message type
             b"ChannelRequest" => Some(Self::ChannelRequest),
+
             b"ChannelSuccess" => Some(Self::ChannelSuccess),
             b"ChannelFailure" => Some(Self::ChannelFailure),
             _ => None,

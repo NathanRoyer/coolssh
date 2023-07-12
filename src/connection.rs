@@ -1,13 +1,14 @@
 use super::{
-    Cipher, HMAC, VERSION_HEADER, Keypair, Rng, sha256, Run,
-    TcpStream, ToSocketAddrs, BufReader, BufWriter, BufRead,
-    Result, Error, ErrorKind, Write, ed25519_blob_len,
+    Cipher, HMAC, VERSION_HEADER, Keypair, Rng, sha256, Error,
+    TcpStream, BufReader, BufWriter, BufRead, Result, Write,
+    ErrorKind, ed25519_blob_len,
 };
 use super::{KeyIvInit, Verifier};
-use super::userauth::{sign_userauth, UserauthRequest};
+use super::userauth::sign_userauth;
 use super::messages::{
     Kexinit, KexdhInit, KexdhReply, ExchangeHash, Newkeys, UserauthPkOk,
     UnsignedMpInt, ServiceRequest, ServiceAccept, UserauthSuccess, Blob,
+    UserauthRequest,
 };
 use super::parsedump::ParseDump;
 use super::packets::{PacketReader, PacketWriter};
@@ -24,14 +25,13 @@ pub enum Auth<'a> {
 }
 
 pub struct Connection {
-    reader: PacketReader<TcpStream>,
-    writer: PacketWriter<TcpStream>,
-    peer_version: String,
+    pub(crate) reader: PacketReader<TcpStream>,
+    pub(crate) writer: PacketWriter<TcpStream>,
+    pub(crate) next_client_channel: u32,
 }
 
 impl Connection {
-    pub fn connect<A: ToSocketAddrs>(addr: A, auth: Auth) -> Result<Self> {
-        let stream = TcpStream::connect(addr)?;
+    pub fn new(stream: TcpStream, auth: Auth) -> Result<Self> {
         let mut reader = BufReader::new(stream.try_clone()?);
         let mut writer = BufWriter::new(stream);
 
@@ -61,7 +61,7 @@ impl Connection {
             peer_version
         };
 
-        println!("peer_version: {}", peer_version);
+        log::info!("peer_version: {}", peer_version);
 
         let mut reader = PacketReader::new(reader);
         let mut writer = PacketWriter::new(writer);
@@ -162,21 +162,21 @@ impl Connection {
         writer.send(&Newkeys {})?;
         let _: Newkeys = reader.recv()?;
 
-        println!("Got server Newkeys");
+        log::trace!("Got server Newkeys");
 
         let kex = KeyExchangeOutput::new(shared_secret, &exchange_hash, &session_id)?;
         writer.set_encryptor(Cipher::new(&kex.c2s_key.into(), &kex.c2s_iv.into()), HMAC::new(&kex.c2s_hmac), 32);
         reader.set_decryptor(Cipher::new(&kex.s2c_key.into(), &kex.s2c_iv.into()), HMAC::new(&kex.s2c_hmac), 32, 32);
 
-        println!("Sending ServiceRequest");
+        log::trace!("Sending ServiceRequest");
 
         writer.send(&ServiceRequest {
             service_name: "ssh-userauth",
         })?;
 
-        println!("Awaiting ServiceAccept");
+        log::trace!("Awaiting ServiceAccept");
         let _: ServiceAccept = reader.recv()?;
-        println!("Got ServiceAccept");
+        log::trace!("Got ServiceAccept");
 
         let service_name = "ssh-connection";
         match auth {
@@ -211,9 +211,9 @@ impl Connection {
                     signature: None,
                 })?;
 
-                println!("Awaiting UserauthPkOk");
+                log::trace!("Awaiting UserauthPkOk");
                 let _: UserauthPkOk = reader.recv()?;
-                println!("Got UserauthPkOk");
+                log::trace!("Got UserauthPkOk");
 
                 let signature = sign_userauth(keypair, &session_id, username, service_name, &ed25519_pub)?;
 
@@ -231,21 +231,19 @@ impl Connection {
             },
         }
 
-        println!("Awaiting UserauthSuccess");
+        log::trace!("Awaiting UserauthSuccess");
         let _: UserauthSuccess = reader.recv()?;
-        println!("Got UserauthSuccess");
+        log::trace!("Got UserauthSuccess");
 
         Ok(Self {
             reader,
             writer,
-            peer_version,
+            next_client_channel: 0,
         })
     }
 
-    pub fn run(self, _command: &str) -> Result<Run> {
-        Ok(Run {
-            conn: self,
-        })
+    pub fn mutate_stream<F: Fn(&mut TcpStream)>(&mut self, func: F) {
+        func(self.reader.inner.get_mut())
     }
 }
 
@@ -317,5 +315,21 @@ impl KeyExchangeOutput {
             c2s_hmac,
             s2c_hmac,
         })
+    }
+}
+
+impl<'a> From<(&'a str, &'a Keypair)> for Auth<'a> {
+    fn from(tuple: (&'a str, &'a Keypair)) -> Auth<'a> {
+        let (username, keypair) = tuple;
+        Self::Ed25519 {
+            username,
+            keypair,
+        }
+    }
+}
+
+impl core::fmt::Debug for Connection {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Connection").finish()
     }
 }
