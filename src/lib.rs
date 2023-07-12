@@ -1,4 +1,4 @@
-//! Minimal SSH 2.0 Client
+//! SSH 2.0 Client
 //! 
 //! ### Example: Initiating a fetch from github
 //! 
