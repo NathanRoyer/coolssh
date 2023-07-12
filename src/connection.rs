@@ -1,24 +1,25 @@
 use super::{
-    Result, Error, ErrorKind, Write,
+    Cipher, HMAC, VERSION_HEADER, Keypair, Rng, sha256, Run,
     TcpStream, ToSocketAddrs, BufReader, BufWriter, BufRead,
-    Cipher, HMAC, VERSION_HEADER, Rng, sha256, Run,
+    Result, Error, ErrorKind, Write, ed25519_blob_len,
 };
 use super::{KeyIvInit, Verifier};
+use super::userauth::{sign_userauth, UserauthRequest};
 use super::messages::{
-    Kexinit, KexdhInit, KexdhReply, ExchangeHash, Unknown1, Newkeys,
-    UnsignedMpInt, ServiceRequest, ServiceAccept,
+    Kexinit, KexdhInit, KexdhReply, ExchangeHash, Newkeys, UserauthPkOk,
+    UnsignedMpInt, ServiceRequest, ServiceAccept, UserauthSuccess, Blob,
 };
 use super::parsedump::ParseDump;
 use super::packets::{PacketReader, PacketWriter};
 
-pub enum Creds<'a> {
+pub enum Auth<'a> {
     Password {
         username: &'a str,
         password: &'a str,
     },
-    PrivateKey {
+    Ed25519 {
         username: &'a str,
-        priv_key: &'a [u8],
+        keypair: &'a Keypair,
     }
 }
 
@@ -29,7 +30,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    pub fn connect<A: ToSocketAddrs>(addr: A, _creds: Creds) -> Result<Self> {
+    pub fn connect<A: ToSocketAddrs>(addr: A, auth: Auth) -> Result<Self> {
         let stream = TcpStream::connect(addr)?;
         let mut reader = BufReader::new(stream.try_clone()?);
         let mut writer = BufWriter::new(stream);
@@ -100,56 +101,61 @@ impl Connection {
             client_ephemeral_pubkey,
         })?;
 
-        let KexdhReply {
-            server_public_host_key,
-            server_ephemeral_pubkey,
-            exchange_hash_signature,
-        } = reader.recv()?;
+        let shared_secret_array;
+        let (exchange_hash, shared_secret) = {
+            let KexdhReply {
+                server_public_host_key,
+                server_ephemeral_pubkey,
+                exchange_hash_signature: Blob {
+                    blob_len: _,
+                    header: _,
+                    content: signature,
+                },
+            } = reader.recv()?;
 
-        let (Unknown1 {
-            _unknown,
-            content: host_pubkey_bytes,
-        }, _) = Unknown1::parse(server_public_host_key)?;
+            let Blob {
+                blob_len: _,
+                header: _,
+                content: host_pubkey_bytes,
+            } = server_public_host_key;
 
-        let (Unknown1 {
-            _unknown,
-            content: signature,
-        }, _) = Unknown1::parse(exchange_hash_signature)?;
+            if server_ephemeral_pubkey.len() != 32 || signature.len() != 64 || host_pubkey_bytes.len() != 32 {
+                return Err(Error::new(ErrorKind::InvalidData, "problem"));
+            }
 
-        if server_ephemeral_pubkey.len() != 32 || signature.len() != 64 || host_pubkey_bytes.len() != 32 {
-            return Err(Error::new(ErrorKind::InvalidData, "problem"));
-        }
+            shared_secret_array = {
+                let mut sep_array = [0; 32];
+                sep_array.copy_from_slice(server_ephemeral_pubkey);
+                secret_key.diffie_hellman(&sep_array.into())
+            };
 
-        let shared_secret = {
-            let mut sep_array = [0; 32];
-            sep_array.copy_from_slice(server_ephemeral_pubkey);
-            secret_key.diffie_hellman(&sep_array.into())
+            let host_pubkey = ed25519_dalek::PublicKey::from_bytes(host_pubkey_bytes)
+                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+
+            let signature = {
+                let mut sig_array = [0; 64];
+                sig_array.copy_from_slice(signature);
+                ed25519_dalek::Signature::from(sig_array)
+            };
+
+            let shared_secret = UnsignedMpInt(shared_secret_array.as_bytes());
+
+            let exchange_hash = sha256(&ExchangeHash {
+                client_header: VERSION_HEADER,
+                server_header: peer_version.as_bytes(),
+                client_kexinit_payload,
+                server_kexinit_payload,
+                server_public_host_key,
+                client_ephemeral_pubkey,
+                server_ephemeral_pubkey,
+                shared_secret,
+            })?;
+
+            host_pubkey.verify(&exchange_hash, &signature)
+                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+
+            (exchange_hash, shared_secret)
         };
-
-        let host_pubkey = ed25519_dalek::PublicKey::from_bytes(host_pubkey_bytes)
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
-
-        let signature = {
-            let mut sig_array = [0; 64];
-            sig_array.copy_from_slice(signature);
-            ed25519_dalek::Signature::from(sig_array)
-        };
-
-        let shared_secret = UnsignedMpInt(shared_secret.as_bytes());
-
-        let exchange_hash = sha256(&ExchangeHash {
-            client_header: VERSION_HEADER,
-            server_header: peer_version.as_bytes(),
-            client_kexinit_payload,
-            server_kexinit_payload,
-            server_public_host_key,
-            client_ephemeral_pubkey,
-            server_ephemeral_pubkey,
-            shared_secret,
-        })?;
-
-        host_pubkey.verify(&exchange_hash, &signature)
-            .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
 
         let session_id = exchange_hash;
 
@@ -169,9 +175,65 @@ impl Connection {
         })?;
 
         println!("Awaiting ServiceAccept");
+        let _: ServiceAccept = reader.recv()?;
+        println!("Got ServiceAccept");
 
-        let accept: ServiceAccept = reader.recv()?;
-        println!("accepted: {:?}", accept);
+        let service_name = "ssh-connection";
+        match auth {
+            Auth::Password {
+                username,
+                password,
+            } => {
+                writer.send(&UserauthRequest::Password {
+                    username,
+                    service_name,
+                    password,
+                    new_password: None,
+                })?;
+            },
+            Auth::Ed25519 {
+                username,
+                keypair,
+            } => {
+                let algorithm = "ssh-ed25519";
+
+                let ed25519_pub = Blob {
+                    blob_len: ed25519_blob_len(32),
+                    header: algorithm,
+                    content: keypair.public.as_bytes().as_slice(),
+                };
+
+                writer.send(&UserauthRequest::PublicKey {
+                    username,
+                    service_name,
+                    algorithm,
+                    blob: ed25519_pub,
+                    signature: None,
+                })?;
+
+                println!("Awaiting UserauthPkOk");
+                let _: UserauthPkOk = reader.recv()?;
+                println!("Got UserauthPkOk");
+
+                let signature = sign_userauth(keypair, &session_id, username, service_name, &ed25519_pub)?;
+
+                writer.send(&UserauthRequest::PublicKey {
+                    username,
+                    service_name,
+                    algorithm,
+                    blob: ed25519_pub,
+                    signature: Some(Blob {
+                        blob_len: ed25519_blob_len(64),
+                        header: algorithm,
+                        content: &signature,
+                    }),
+                })?;
+            },
+        }
+
+        println!("Awaiting UserauthSuccess");
+        let _: UserauthSuccess = reader.recv()?;
+        println!("Got UserauthSuccess");
 
         Ok(Self {
             reader,

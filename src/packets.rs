@@ -58,16 +58,13 @@ impl<R: Read> PacketReader<R> {
     pub fn recv_raw(&mut self) -> Result<&[u8]> {
         self.packet.clear();
 
-        self.pull_and_decrypt(self.block_size)?;
+        self.pull_and_decrypt(U32)?;
 
         let packet_length = try_u32(&self.packet).unwrap() as usize;
-        if let Some(remaining_length) = packet_length.checked_sub(self.block_size - U32) {
-            self.pull_and_decrypt(remaining_length)?;
-            if self.mac_size != 0 {
-                self.pull(self.mac_size)?;
-            }
-        } else {
-            return Err(Error::new(ErrorKind::UnexpectedEof, "Invalid packet_length (1)"));
+        self.pull_and_decrypt(packet_length)?;
+
+        if self.mac_size != 0 {
+            self.pull(self.mac_size)?;
         }
 
         let padding_length = self.packet[U32] as usize;
@@ -80,6 +77,11 @@ impl<R: Read> PacketReader<R> {
 
                 let (packet, packet_hmac) = self.packet.split_at(packet_length + U32);
                 hmac.update(packet);
+
+                if packet_hmac.len() != self.mac_size {
+                    let errmsg = format!("Incorrect Packet Mac Size ({})", packet_hmac.len());
+                    return Err(Error::new(ErrorKind::InvalidData, errmsg));
+                }
 
                 if packet_hmac != &hmac.finalize() {
                     return Err(Error::new(ErrorKind::InvalidData, "Incorrect Packet Mac"));
@@ -96,7 +98,7 @@ impl<R: Read> PacketReader<R> {
                 self.recv_raw()
             }
         } else {
-            Err(Error::new(ErrorKind::UnexpectedEof, "Invalid packet_length (2)"))
+            Err(Error::new(ErrorKind::UnexpectedEof, "Invalid packet_length"))
         }
     }
 

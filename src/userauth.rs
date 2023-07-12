@@ -1,7 +1,28 @@
-use super::{Result, Error, ErrorKind, U8, U32, Write};
+use super::{Result, Error, ErrorKind, U8, Write, Keypair, Signer};
 use super::parsedump::ParseDump;
-use super::messages::MessageType;
+use super::messages::{MessageType, Blob};
 use super::check_msg_type;
+
+pub fn sign_userauth(
+    keypair: &Keypair,
+    session_id: &[u8],
+    username: &str,
+    service_name: &str,
+    ed25519_pub: &Blob,
+) -> Result<[u8; 64]> {
+    let mut dumped = Vec::new();
+
+    session_id.dump(&mut dumped)?;
+    (MessageType::UserauthRequest as u8).dump(&mut dumped)?;
+    username.dump(&mut dumped)?;
+    service_name.dump(&mut dumped)?;
+    "publickey".dump(&mut dumped)?;
+    true.dump(&mut dumped)?;
+    "ssh-ed25519".dump(&mut dumped)?;
+    ed25519_pub.dump(&mut dumped)?;
+
+    Ok(keypair.sign(&dumped).to_bytes())
+}
 
 #[derive(Debug)]
 pub enum UserauthRequest<'a> {
@@ -9,8 +30,8 @@ pub enum UserauthRequest<'a> {
         username: &'a str,
         service_name: &'a str,
         algorithm: &'a str,
-        blob: &'a [u8],
-        signature: Option<&'a [u8]>,
+        blob: Blob<'a>,
+        signature: Option<Blob<'a>>,
     },
     Password {
         username: &'a str,
@@ -38,12 +59,12 @@ impl<'a, 'b: 'a> ParseDump<'b> for UserauthRequest<'a> {
             "publickey" => {
                 let (algorithm, inc) = <&'a str>::parse(&bytes[i..])?;
                 i += inc;
-                let (blob, inc) = <&'a [u8]>::parse(&bytes[i..])?;
+                let (blob, inc) = Blob::parse(&bytes[i..])?;
                 i += inc;
 
                 let (signature, inc) = match has_option {
-                    true => <&'a [u8]>::parse(&bytes[i..])?,
-                    false => (b"".as_slice(), 0),
+                    true => Blob::parse(&bytes[i..]).map(|(v, i)| (Some(v), i))?,
+                    false => (None, 0),
                 };
                 i += inc;
 
@@ -52,7 +73,7 @@ impl<'a, 'b: 'a> ParseDump<'b> for UserauthRequest<'a> {
                     service_name,
                     algorithm,
                     blob,
-                    signature: inc.checked_sub(U32).map(|_| signature),
+                    signature,
                 }, i))
             },
             "password" => {
@@ -60,8 +81,8 @@ impl<'a, 'b: 'a> ParseDump<'b> for UserauthRequest<'a> {
                 i += inc;
 
                 let (new_password, inc) = match has_option {
-                    true => <&'a str>::parse(&bytes[i..])?,
-                    false => ("", 0),
+                    true => <&'a str>::parse(&bytes[i..]).map(|(v, i)| (Some(v), i))?,
+                    false => (None, 0),
                 };
                 i += inc;
 
@@ -69,7 +90,7 @@ impl<'a, 'b: 'a> ParseDump<'b> for UserauthRequest<'a> {
                     username,
                     service_name,
                     password,
-                    new_password: inc.checked_sub(U32).map(|_| new_password),
+                    new_password,
                 }, i))
             },
             _ => {

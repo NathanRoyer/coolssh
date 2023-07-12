@@ -49,7 +49,7 @@ macro_rules! parse_dump_struct_inner {
 #[macro_export]
 macro_rules! parse_dump_struct {
     ($name:ident<$lifetime:lifetime> { $($field:ident: $field_type:ty,)* }) => {
-        #[derive(Debug)]
+        #[derive(Copy, Clone, Debug)]
         pub struct $name<$lifetime> {
             $(
                 pub $field: $field_type,

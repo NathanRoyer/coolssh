@@ -1,4 +1,4 @@
-//! SSH 2.0 Client
+//! Minimal SSH 2.0 Client
 
 #![allow(dead_code)]
 
@@ -10,6 +10,7 @@ use rand_core::OsRng as Rng;
 use ed25519_dalek::Verifier;
 use aes::cipher::{KeyIvInit, StreamCipher};
 use hmac_sha256::HMAC;
+use ed25519_dalek::{Keypair, Signer};
 
 type Cipher = ctr::Ctr64BE<aes::Aes256>;
 
@@ -24,7 +25,7 @@ pub mod messages;
 pub mod packets;
 
 #[doc(inline)]
-pub use connection::{Connection, Creds};
+pub use connection::{Connection, Auth};
 
 pub struct Run {
     conn: Connection,
@@ -54,9 +55,34 @@ fn sha256<'b, P: parsedump::ParseDump<'b>>(data: &P) -> Result<[u8; 32]> {
     Ok(hasher.0.finalize())
 }
 
-#[test]
-fn connection() {
-    if let Err(error) = Connection::connect("github.com:22", Creds::Password { username: "", password: "" }) {
-        println!("{:#?}", error);
-    }
+#[cfg(feature = "dump")]
+pub fn dump_ed25519_pub(ed25519_pub: &[u8], username: &str) -> String {
+    use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
+    use parsedump::ParseDump;
+    use std::io::Cursor;
+
+    let mut dumped = [0; ed25519_blob_len(32) as _];
+
+    let mut cursor = Cursor::new(&mut dumped[..]);
+    "ssh-ed25519".dump(&mut cursor).unwrap();
+    ed25519_pub.dump(&mut cursor).unwrap();
+
+    let mut encoded = "ssh-ed25519 ".into();
+    STANDARD_NO_PAD.encode_string(dumped, &mut encoded);
+    encoded += " ";
+    encoded += username;
+    encoded += "\n";
+    encoded
+}
+
+#[cfg(feature = "dump")]
+pub fn create_ed25519_keypair(username: &str) -> (String, Keypair) {
+    let mut csprng = Rng;
+    let keypair = Keypair::generate(&mut csprng);
+    let ed25519_pub = keypair.public.as_bytes();
+    (dump_ed25519_pub(ed25519_pub, username), keypair)
+}
+
+pub(crate) const fn ed25519_blob_len(content_len: u32) -> u32 {
+    4 + 11 + 4 + content_len
 }

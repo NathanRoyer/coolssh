@@ -1,15 +1,17 @@
 use super::{Result, Error, ErrorKind, Write, U8, U32};
 use super::parse_dump_struct;
 use super::parsedump::{ParseDump, too_short, try_u32};
+use super::userauth::UserauthRequest;
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! check_msg_type {
     ($name:ident, $expected:expr, $bytes:ident) => {
-        let raw_msg_type = u8::parse(&$bytes)?.0;
+        let raw_msg_type = u8::parse($bytes)?.0;
         let msg_type = MessageType::try_from(raw_msg_type)?;
         if msg_type != $expected {
-            let err_msg = format!(concat!("Expected ", stringify!($name), " message but got {:?}"), msg_type);
+            let (msg, _) = $crate::messages::Message::parse($bytes)?;
+            let err_msg = format!(concat!("Expected ", stringify!($name), " message but got {:#?}"), msg);
             return Err(Error::new(ErrorKind::InvalidData, err_msg));
         }
     }
@@ -17,20 +19,20 @@ macro_rules! check_msg_type {
 
 #[derive(Debug)]
 pub enum Message<'a> {
-    Disconnect,
+    Disconnect(Disconnect<'a>),
     Ignore,
     Unimplemented(Unimplemented),
     Debug,
-    ServiceRequest,
-    ServiceAccept,
+    ServiceRequest(ServiceRequest<'a>),
+    ServiceAccept(ServiceAccept<'a>),
     Kexinit(Kexinit<'a>),
-    Newkeys,
+    Newkeys(Newkeys),
     KexdhInit(KexdhInit<'a>),
     KexdhReply(KexdhReply<'a>),
-    UserauthRequest,
-    UserauthFailure,
-    UserauthSuccess,
-    UserauthPkOk,
+    UserauthRequest(UserauthRequest<'a>),
+    UserauthFailure(UserauthFailure<'a>),
+    UserauthSuccess(UserauthSuccess),
+    UserauthPkOk(UserauthPkOk<'a>),
     GlobalRequest,
     RequestSuccess,
     RequestFailure,
@@ -72,9 +74,9 @@ parse_dump_struct!(KexdhInit<'a> {
 });
 
 parse_dump_struct!(KexdhReply<'a> {
-    server_public_host_key: &'a [u8],
+    server_public_host_key: Blob<'a>,
     server_ephemeral_pubkey: &'a [u8],
-    exchange_hash_signature: &'a [u8],
+    exchange_hash_signature: Blob<'a>,
 });
 
 parse_dump_struct!(Newkeys {});
@@ -93,19 +95,34 @@ parse_dump_struct!(Disconnect<'a> {
     language_tag: &'a str,
 });
 
+parse_dump_struct!(UserauthSuccess {});
+
+parse_dump_struct!(UserauthPkOk<'a> {
+    algorithm: &'a str,
+    blob: Blob<'a>,
+});
+
+parse_dump_struct!(UserauthFailure<'a> {
+    allowed_auth: &'a str,
+    partial_success: bool,
+});
+
+// utils, not messages:
+
 parse_dump_struct!(ExchangeHash<'a> {
     client_header: &'a [u8],
     server_header: &'a [u8],
     client_kexinit_payload: &'a [u8],
     server_kexinit_payload: &'a [u8],
-    server_public_host_key: &'a [u8],
+    server_public_host_key: Blob<'a>,
     client_ephemeral_pubkey: &'a [u8],
     server_ephemeral_pubkey: &'a [u8],
     shared_secret: UnsignedMpInt<'a>,
 });
 
-parse_dump_struct!(Unknown1<'a> {
-    _unknown: &'a [u8],
+parse_dump_struct!(Blob<'a> {
+    blob_len: u32,
+    header: &'a str,
     content: &'a [u8],
 });
 
@@ -117,8 +134,20 @@ impl<'a, 'b: 'a> ParseDump<'b> for Message<'a> {
     fn parse(bytes: &'b [u8]) -> Result<(Self, usize)> {
         let typ = *bytes.get(0).ok_or_else(|| too_short())?;
         match MessageType::try_from(typ)? {
-            MessageType::Kexinit => forward_and_wrap!(Kexinit, bytes),
+
+            MessageType::Disconnect => forward_and_wrap!(Disconnect, bytes),
             MessageType::Unimplemented => forward_and_wrap!(Unimplemented, bytes),
+            MessageType::ServiceRequest => forward_and_wrap!(ServiceRequest, bytes),
+            MessageType::ServiceAccept => forward_and_wrap!(ServiceAccept, bytes),
+            MessageType::Kexinit => forward_and_wrap!(Kexinit, bytes),
+            MessageType::Newkeys => forward_and_wrap!(Newkeys, bytes),
+            MessageType::KexdhInit => forward_and_wrap!(KexdhInit, bytes),
+            MessageType::KexdhReply => forward_and_wrap!(KexdhReply, bytes),
+            MessageType::UserauthRequest => forward_and_wrap!(UserauthRequest, bytes),
+            MessageType::UserauthFailure => forward_and_wrap!(UserauthFailure, bytes),
+            MessageType::UserauthSuccess => forward_and_wrap!(UserauthSuccess, bytes),
+            MessageType::UserauthPkOk => forward_and_wrap!(UserauthPkOk, bytes),
+
             typ => Err(Error::new(ErrorKind::InvalidData, format!("Unimplemented Message Type: {:?}", typ))),
         }
     }
@@ -136,20 +165,20 @@ impl<'a, 'b: 'a> ParseDump<'b> for Message<'a> {
 impl<'a> Message<'a> {
     pub fn typ(&self) -> MessageType {
         match self {
-            Self::Disconnect => MessageType::Disconnect,
+            Self::Disconnect(_) => MessageType::Disconnect,
             Self::Ignore => MessageType::Ignore,
             Self::Unimplemented(_) => MessageType::Unimplemented,
             Self::Debug => MessageType::Debug,
-            Self::ServiceRequest => MessageType::ServiceRequest,
-            Self::ServiceAccept => MessageType::ServiceAccept,
+            Self::ServiceRequest(_) => MessageType::ServiceRequest,
+            Self::ServiceAccept(_) => MessageType::ServiceAccept,
             Self::Kexinit(_) => MessageType::Kexinit,
-            Self::Newkeys => MessageType::Newkeys,
+            Self::Newkeys(_) => MessageType::Newkeys,
             Self::KexdhInit(_) => MessageType::KexdhInit,
             Self::KexdhReply(_) => MessageType::KexdhReply,
-            Self::UserauthRequest => MessageType::UserauthRequest,
-            Self::UserauthFailure => MessageType::UserauthFailure,
-            Self::UserauthSuccess => MessageType::UserauthSuccess,
-            Self::UserauthPkOk => MessageType::UserauthPkOk,
+            Self::UserauthRequest(_) => MessageType::UserauthRequest,
+            Self::UserauthFailure(_) => MessageType::UserauthFailure,
+            Self::UserauthSuccess(_) => MessageType::UserauthSuccess,
+            Self::UserauthPkOk(_) => MessageType::UserauthPkOk,
             Self::GlobalRequest => MessageType::GlobalRequest,
             Self::RequestSuccess => MessageType::RequestSuccess,
             Self::RequestFailure => MessageType::RequestFailure,
