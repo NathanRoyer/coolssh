@@ -1,30 +1,4 @@
-//! SSH 2.0 Client
-//! 
-//! ### Example: Initiating a fetch from github
-//! 
-//! ```rust
-//! let github_account_id = "john.doe@gmail.com";
-//! let (openssh_encoded_pubkey, keypair) = create_ed25519_keypair(github_account_id);
-//! 
-//! println!("{}", openssh_encoded_pubkey);
-//! // Add this public key to `authorized_keys` on your server
-//! // -> https://github.com/settings/keys
-//! 
-//! let stream = TcpStream::connect("github.com:22").unwrap();
-//! let mut conn = Connection::new(stream, ("git", &keypair).into()).unwrap();
-//! 
-//! // set appropriate timeout (preferably after authentication):
-//! conn.mutate_stream(|stream| {
-//!     let duration = std::time::Duration::from_millis(200);
-//!     stream.set_read_timeout(Some(duration)).unwrap()
-//! });
-//! 
-//! let run = conn.run("git-upload-pack rust-lang/rust.git").unwrap();
-//! ```
-//! 
-//! ### Note
-//! 
-//! With few modifications, you can implement a server from this code.
+#![doc = include_str!("../README.md")]
 
 #![allow(dead_code)]
 
@@ -35,7 +9,7 @@ use core::mem::size_of;
 use rand_core::OsRng as Rng;
 use ed25519_dalek::Verifier;
 use aes::cipher::{KeyIvInit, StreamCipher};
-use hmac_sha256::HMAC;
+use hmac::Hmac;
 use ed25519_dalek::{Keypair, Signer};
 
 type Cipher = ctr::Ctr64BE<aes::Aes256>;
@@ -51,6 +25,7 @@ mod channelrequest;
 mod messages;
 mod packets;
 mod run;
+mod hmac;
 
 #[doc(inline)]
 pub use {
@@ -59,9 +34,9 @@ pub use {
 };
 
 fn sha256<'b, P: parsedump::ParseDump<'b>>(data: &P) -> Result<[u8; 32]> {
-    use hmac_sha256::Hash;
+    use sha2::{Sha256, Digest};
 
-    struct Wrapper(Hash);
+    struct Wrapper(Sha256);
     impl Write for Wrapper {
         fn flush(&mut self) -> Result<()> { Ok(()) }
         fn write(&mut self, buf: &[u8]) -> Result<usize> {
@@ -70,10 +45,10 @@ fn sha256<'b, P: parsedump::ParseDump<'b>>(data: &P) -> Result<[u8; 32]> {
         }
     }
 
-    let mut hasher = Wrapper(Hash::new());
+    let mut hasher = Wrapper(Sha256::new());
     data.dump(&mut hasher)?;
 
-    Ok(hasher.0.finalize())
+    Ok(hasher.0.finalize().into())
 }
 
 #[cfg(feature = "dump")]

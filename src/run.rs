@@ -20,8 +20,8 @@ impl Connection {
         self.writer.send(&ChannelOpen {
             channel_type: "session",
             client_channel,
-            client_initial_window_size: 8 * 0x1000,
-            client_max_packet_size: 8 * 0x1000,
+            client_initial_window_size: u32::MAX,
+            client_max_packet_size: 64 * 0x1000,
         })?;
 
         let ChannelOpenConfirmation {
@@ -64,7 +64,7 @@ impl Connection {
 
                 loop {
                     match run.poll()? {
-                        RunEvent::None => std::thread::sleep(std::time::Duration::from_millis(100)),
+                        RunEvent::None => std::thread::sleep(std::time::Duration::from_millis(10)),
                         RunEvent::Data(data) => { output.as_mut().map(|o| o.extend_from_slice(data)); },
                         RunEvent::ExtDataStdout(data) => { output.as_mut().map(|o| o.extend_from_slice(data)); },
                         RunEvent::Stopped(exit_status) => return Ok(RunResult::Accepted((output, exit_status))),

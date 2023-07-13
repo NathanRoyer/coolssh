@@ -1,5 +1,5 @@
 use super::{
-    Cipher, HMAC, VERSION_HEADER, Keypair, Rng, sha256, Error,
+    Cipher, Hmac, VERSION_HEADER, Keypair, Rng, sha256, Error,
     TcpStream, BufReader, BufWriter, BufRead, Result, Write,
     ErrorKind, ed25519_blob_len,
 };
@@ -165,8 +165,8 @@ impl Connection {
         log::trace!("Got server Newkeys");
 
         let kex = KeyExchangeOutput::new(shared_secret, &exchange_hash, &session_id)?;
-        writer.set_encryptor(Cipher::new(&kex.c2s_key.into(), &kex.c2s_iv.into()), HMAC::new(&kex.c2s_hmac), 32);
-        reader.set_decryptor(Cipher::new(&kex.s2c_key.into(), &kex.s2c_iv.into()), HMAC::new(&kex.s2c_hmac), 32, 32);
+        writer.set_encryptor(Cipher::new(&kex.c2s_key.into(), &kex.c2s_iv.into()), Hmac::new(&kex.c2s_hmac), 32);
+        reader.set_decryptor(Cipher::new(&kex.s2c_key.into(), &kex.s2c_iv.into()), Hmac::new(&kex.s2c_hmac), 32, 32);
 
         log::trace!("Sending ServiceRequest");
 

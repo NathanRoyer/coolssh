@@ -1,7 +1,7 @@
 use core::ops::Range;
 use super::{
     Result, Error, ErrorKind, U8, U32, Write, Read,
-    BufReader, BufWriter, Cipher, HMAC,
+    BufReader, BufWriter, Cipher, Hmac,
 };
 use super::StreamCipher;
 use super::messages::{MessageType, GlobalRequest};
@@ -11,7 +11,7 @@ pub struct PacketReader<R: Read> {
     pub(crate) inner: BufReader<R>,
     packet: Vec<u8>,
     packet_number: u32,
-    negociated: Option<(Cipher, HMAC)>,
+    negociated: Option<(Cipher, Hmac)>,
     block_size: usize,
     mac_size: usize,
 }
@@ -28,7 +28,7 @@ impl<R: Read> PacketReader<R> {
         }
     }
 
-    pub fn set_decryptor(&mut self, decryptor: Cipher, hmac: HMAC, block_size: usize, mac_size: usize) {
+    pub fn set_decryptor(&mut self, decryptor: Cipher, hmac: Hmac, block_size: usize, mac_size: usize) {
         self.negociated = Some((decryptor, hmac));
         self.block_size = block_size;
         self.mac_size = mac_size;
@@ -40,7 +40,7 @@ impl<R: Read> PacketReader<R> {
         let range = old_len..new_len;
 
         self.packet.resize(new_len, 0);
-        self.inner.read(&mut self.packet[range.clone()])?;
+        self.inner.read_exact(&mut self.packet[range.clone()])?;
 
         Ok(range)
     }
@@ -58,16 +58,23 @@ impl<R: Read> PacketReader<R> {
     pub fn recv_raw(&mut self) -> Result<&[u8]> {
         self.packet.clear();
 
+        log::trace!("---------- PACKET ----------");
+        log::trace!("packet_number = {}", self.packet_number);
         self.pull_and_decrypt(U32)?;
 
         let packet_length = try_u32(&self.packet).unwrap() as usize;
+        log::trace!("packet_length = {}", packet_length);
         self.pull_and_decrypt(packet_length)?;
+        log::trace!("self.packet.len() = {}", self.packet.len());
 
         if self.mac_size != 0 {
+            log::trace!("self.mac_size = {}", self.mac_size);
             self.pull(self.mac_size)?;
+            log::trace!("self.packet.len() = {}", self.packet.len());
         }
 
         let padding_length = self.packet[U32] as usize;
+        log::trace!("padding_length = {}", padding_length);
         if let Some(payload_length) = packet_length.checked_sub(padding_length).and_then(|v| v.checked_sub(U8)) {
             let payload_offset = U32 + U8;
 
@@ -76,6 +83,7 @@ impl<R: Read> PacketReader<R> {
                 hmac.update(self.packet_number.to_be_bytes().as_slice());
 
                 let (packet, packet_hmac) = self.packet.split_at(packet_length + U32);
+                log::trace!("hmac 2nd update: {} bytes", packet.len());
                 hmac.update(packet);
 
                 if packet_hmac.len() != self.mac_size {
@@ -122,7 +130,7 @@ pub struct PacketWriter<W: Write> {
     inner: BufWriter<W>,
     packet: Vec<u8>,
     packet_number: u32,
-    negociated: Option<(Cipher, HMAC)>,
+    negociated: Option<(Cipher, Hmac)>,
     block_size: usize,
 }
 
@@ -137,7 +145,7 @@ impl<W: Write> PacketWriter<W> {
         }
     }
 
-    pub fn set_encryptor(&mut self, encryptor: Cipher, hmac: HMAC, block_size: usize) {
+    pub fn set_encryptor(&mut self, encryptor: Cipher, hmac: Hmac, block_size: usize) {
         self.negociated = Some((encryptor, hmac));
         self.block_size = block_size;
     }
@@ -180,7 +188,7 @@ impl<W: Write> PacketWriter<W> {
 
         self.packet_number = self.packet_number.wrapping_add(1);
 
-        self.inner.write(&self.packet)?;
+        self.inner.write_all(&self.packet)?;
         self.inner.flush()
     }
 }
