@@ -1,16 +1,13 @@
 #![doc = include_str!("../README.md")]
 
-#![allow(dead_code)]
-
-use std::io::{Result, Error, ErrorKind, BufReader, BufWriter, BufRead, Read, Write};
+use std::io::{Result as IoResult, Error as IoError, ErrorKind, BufReader, BufWriter, BufRead, Read, Write};
 use std::net::TcpStream;
 use core::mem::size_of;
 
 use rand_core::OsRng as Rng;
-use ed25519_dalek::Verifier;
 use aes::cipher::{KeyIvInit, StreamCipher};
 use hmac::Hmac;
-use ed25519_dalek::{Keypair, Signer};
+use ed25519_dalek::{Verifier, Signer};
 
 type Cipher = ctr::Ctr64BE<aes::Aes256>;
 
@@ -31,6 +28,8 @@ mod hmac;
 pub use {
     connection::{Connection, Auth},
     run::{Run, RunResult, RunEvent, ExitStatus},
+    ed25519_dalek::Keypair,
+    messages::MessageType,
 };
 
 fn sha256<'b, P: parsedump::ParseDump<'b>>(data: &P) -> Result<[u8; 32]> {
@@ -38,8 +37,8 @@ fn sha256<'b, P: parsedump::ParseDump<'b>>(data: &P) -> Result<[u8; 32]> {
 
     struct Wrapper(Sha256);
     impl Write for Wrapper {
-        fn flush(&mut self) -> Result<()> { Ok(()) }
-        fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        fn flush(&mut self) -> IoResult<()> { Ok(()) }
+        fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
             self.0.update(buf);
             Ok(buf.len())
         }
@@ -81,4 +80,30 @@ pub fn create_ed25519_keypair(username: &str) -> (String, Keypair) {
 
 pub(crate) const fn ed25519_blob_len(content_len: u32) -> u32 {
     4 + 11 + 4 + content_len
+}
+
+/// Fatal errors
+#[derive(Copy, Clone, Debug)]
+pub enum Error {
+    /// No data to be read / send buffer is full.
+    Timeout,
+    /// Errors related to the TCP socket
+    TcpError(ErrorKind),
+    /// Invalid data type/encoding/size
+    InvalidData,
+    /// Authentication failure
+    AuthenticationFailure,
+    ProcessHasExited,
+    UnexpectedMessageType(MessageType),
+    UnknownMessageType(u8),
+    /// This can be raised instead of UnexpectedMessageType, if the peer sends random bytes
+    Unimplemented,
+}
+
+pub type Result<T> = core::result::Result<T, Error>;
+
+impl From<IoError> for Error {
+    fn from(err: IoError) -> Self {
+        Self::TcpError(err.kind())
+    }
 }

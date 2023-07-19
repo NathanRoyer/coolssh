@@ -1,4 +1,4 @@
-use super::{Result, Error, ErrorKind, Write, U8, U32};
+use super::{Result, Error, Write, U8, U32};
 use super::parse_dump_struct;
 use super::parsedump::{ParseDump, too_short, try_u32};
 pub use super::userauth::UserauthRequest;
@@ -15,13 +15,14 @@ macro_rules! check_msg_type {
         let msg_type = MessageType::try_from(raw_msg_type)?;
         if msg_type != $expected {
             let (msg, _) = $crate::messages::Message::parse($bytes)?;
-            let err_msg = format!(concat!("Expected ", stringify!($name), " message but got {:#?}"), msg);
-            return Err(Error::new(ErrorKind::InvalidData, err_msg));
+            log::error!(concat!("Expected ", stringify!($name), " message but got {:#?}"), msg);
+            return Err(Error::UnexpectedMessageType(msg_type));
         }
     }
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum Message<'a> {
     Disconnect(Disconnect<'a>),
     Ignore,
@@ -216,16 +217,44 @@ impl<'a, 'b: 'a> ParseDump<'b> for Message<'a> {
             MessageType::ChannelRequest => forward_and_wrap!(ChannelRequest, bytes),
             MessageType::GlobalRequest => forward_and_wrap!(GlobalRequest, bytes),
 
-            typ => Err(Error::new(ErrorKind::InvalidData, format!("Unimplemented Message Type: {:?}", typ))),
+            typ => {
+                log::error!("Unimplemented: Message::parse() for {:?}", typ);
+                Err(Error::Unimplemented)
+            },
         }
     }
 
     fn dump<W: Write>(&self, sink: &mut W) -> Result<()> {
         (self.typ() as u8).dump(sink)?;
         match self {
-            Self::Kexinit(inner) => inner.dump(sink),
+            Self::Disconnect(inner) => inner.dump(sink),
             Self::Unimplemented(inner) => inner.dump(sink),
-            typ => Err(Error::new(ErrorKind::InvalidData, format!("Unimplemented Message Type: {:?}", typ))),
+            Self::ServiceRequest(inner) => inner.dump(sink),
+            Self::ServiceAccept(inner) => inner.dump(sink),
+            Self::Kexinit(inner) => inner.dump(sink),
+            Self::Newkeys(inner) => inner.dump(sink),
+            Self::KexdhInit(inner) => inner.dump(sink),
+            Self::KexdhReply(inner) => inner.dump(sink),
+            Self::UserauthRequest(inner) => inner.dump(sink),
+            Self::UserauthFailure(inner) => inner.dump(sink),
+            Self::UserauthSuccess(inner) => inner.dump(sink),
+            Self::UserauthPkOk(inner) => inner.dump(sink),
+            Self::ChannelOpen(inner) => inner.dump(sink),
+            Self::ChannelOpenConfirmation(inner) => inner.dump(sink),
+            Self::ChannelOpenFailure(inner) => inner.dump(sink),
+            Self::ChannelData(inner) => inner.dump(sink),
+            Self::ChannelExtendedData(inner) => inner.dump(sink),
+            Self::ChannelEof(inner) => inner.dump(sink),
+            Self::ChannelClose(inner) => inner.dump(sink),
+            Self::ChannelSuccess(inner) => inner.dump(sink),
+            Self::ChannelFailure(inner) => inner.dump(sink),
+            Self::ChannelRequest(inner) => inner.dump(sink),
+            Self::GlobalRequest(inner) => inner.dump(sink),
+
+            typ => {
+                log::error!("Unimplemented: Message::dump() for {:?}", typ);
+                Err(Error::Unimplemented)
+            },
         }
     }
 }
@@ -265,7 +294,7 @@ impl<'a> Message<'a> {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum MessageType {
     Disconnect = 1,
@@ -372,7 +401,7 @@ impl TryFrom<u8> for MessageType {
             98 => Ok(Self::ChannelRequest),
             99 => Ok(Self::ChannelSuccess),
             100 => Ok(Self::ChannelFailure),
-            _ => Err(Error::new(ErrorKind::InvalidData, "Unknown Message Type")),
+            value => Err(Error::UnknownMessageType(value)),
         }
     }
 }
@@ -396,7 +425,9 @@ impl<'a, 'b: 'a> ParseDump<'b> for UnsignedMpInt<'a> {
             if prevent_sign {
                 sink.write(&[0])?;
             }
-            sink.write(self.0).map(|_| ())
+
+            sink.write(self.0)?;
+            Ok(())
         } else {
             0u32.dump(sink)
         }
@@ -442,7 +473,10 @@ impl<'b> ParseDump<'b> for DisconnectReasonCode {
             13 => Ok(Self::AuthCancelledByUser),
             14 => Ok(Self::NoMoreAuthMethodsAvailable),
             15 => Ok(Self::IllegalUserName),
-            c => Err(Error::new(ErrorKind::InvalidData, format!("Invalid disconnect reason code: {}", c)))
+            c => {
+                log::error!("Invalid disconnect reason code: {}", c);
+                Err(Error::InvalidData)
+            },
         }?;
         Ok((reason, progress))
     }
@@ -455,9 +489,11 @@ impl<'b> ParseDump<'b> for DisconnectReasonCode {
 impl<'a> Kexinit<'a> {
     pub fn check_compat(&self, client: &Self) -> Result<()> {
         fn find(haystack: &str, needle: &str) -> Result<()> {
-            let errmsg = "Couldn't agree with peer on an algorithm set";
             match haystack.split(",").position(|alg| alg == needle) {
-                None => Err(Error::new(ErrorKind::Unsupported, errmsg)),
+                None => {
+                    log::error!("Couldn't agree with peer on an algorithm set");
+                    Err(Error::Unimplemented)
+                },
                 Some(_) => Ok(()),
             }
         }

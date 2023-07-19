@@ -1,4 +1,4 @@
-use super::{Result, Error, ErrorKind, U8, Write, Keypair, Signer};
+use super::{Result, Error, U8, Write, Keypair, Signer};
 use super::parsedump::ParseDump;
 use super::messages::{MessageType, Blob};
 use super::check_msg_type;
@@ -94,8 +94,8 @@ impl<'a, 'b: 'a> ParseDump<'b> for UserauthRequest<'a> {
                 }, i))
             },
             _ => {
-                let errmsg = format!("Unsupported UserauthRequest Variant ({})", method_name);
-                Err(Error::new(ErrorKind::Unsupported, errmsg))
+                log::error!("UserauthRequest: variant {} isn't supported yet", method_name);
+                Err(Error::Unimplemented)
             },
         }
     }

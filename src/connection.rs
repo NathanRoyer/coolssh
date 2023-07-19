@@ -1,14 +1,12 @@
 use super::{
-    Cipher, Hmac, VERSION_HEADER, Keypair, Rng, sha256, Error,
-    TcpStream, BufReader, BufWriter, BufRead, Result, Write,
-    ErrorKind, ed25519_blob_len,
+    Cipher, Hmac, VERSION_HEADER, Keypair, Rng, ed25519_blob_len, Error,
+    TcpStream, BufReader, BufWriter, BufRead, Result, Write, sha256,
 };
 use super::{KeyIvInit, Verifier};
 use super::userauth::sign_userauth;
 use super::messages::{
-    Kexinit, KexdhInit, KexdhReply, ExchangeHash, Newkeys, UserauthPkOk,
-    UnsignedMpInt, ServiceRequest, ServiceAccept, UserauthSuccess, Blob,
-    UserauthRequest,
+    UnsignedMpInt, ServiceRequest, ServiceAccept, UserauthRequest, Blob,
+    Kexinit, KexdhInit, KexdhReply, ExchangeHash, Newkeys, Message,
 };
 use super::parsedump::ParseDump;
 use super::packets::{PacketReader, PacketWriter};
@@ -55,7 +53,8 @@ impl Connection {
             let cr = peer_version.pop();
 
             if (cr, lf) != (Some('\r'), Some('\n')) {
-                return Err(Error::new(ErrorKind::InvalidData, format!("Invalid Version Header: {}", peer_version)));
+                log::error!("Invalid Version Header: {}", peer_version);
+                return Err(Error::InvalidData);
             }
 
             peer_version
@@ -120,7 +119,8 @@ impl Connection {
             } = server_public_host_key;
 
             if server_ephemeral_pubkey.len() != 32 || signature.len() != 64 || host_pubkey_bytes.len() != 32 {
-                return Err(Error::new(ErrorKind::InvalidData, "problem"));
+                log::error!("Invalid Server KexdhReply (wrong field length)");
+                return Err(Error::InvalidData);
             }
 
             shared_secret_array = {
@@ -129,8 +129,10 @@ impl Connection {
                 secret_key.diffie_hellman(&sep_array.into())
             };
 
-            let host_pubkey = ed25519_dalek::PublicKey::from_bytes(host_pubkey_bytes)
-                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+            let host_pubkey = ed25519_dalek::PublicKey::from_bytes(host_pubkey_bytes).map_err(|e| {
+                log::error!("Couldn't reconstruct server public key: {}", e);
+                Error::InvalidData
+            })?;
 
             let signature = {
                 let mut sig_array = [0; 64];
@@ -151,8 +153,10 @@ impl Connection {
                 shared_secret,
             })?;
 
-            host_pubkey.verify(&exchange_hash, &signature)
-                .map_err(|e| Error::new(ErrorKind::InvalidData, e))?;
+            host_pubkey.verify(&exchange_hash, &signature).map_err(|e| {
+                log::error!("Exchange hash couldn't be verified: {}", e);
+                Error::InvalidData
+            })?;
 
             (exchange_hash, shared_secret)
         };
@@ -212,7 +216,14 @@ impl Connection {
                 })?;
 
                 log::trace!("Awaiting UserauthPkOk");
-                let _: UserauthPkOk = reader.recv()?;
+                match reader.recv()? {
+                    Message::UserauthPkOk(_) => Ok((/* nice */)),
+                    Message::UserauthFailure(_) => Err(Error::AuthenticationFailure),
+                    msg => {
+                        log::error!("Expected UserauthPkOk, got {:?}", msg);
+                        Err(Error::UnexpectedMessageType(msg.typ()))
+                    },
+                }?;
                 log::trace!("Got UserauthPkOk");
 
                 let signature = sign_userauth(keypair, &session_id, username, service_name, &ed25519_pub)?;
@@ -232,7 +243,14 @@ impl Connection {
         }
 
         log::trace!("Awaiting UserauthSuccess");
-        let _: UserauthSuccess = reader.recv()?;
+        match reader.recv()? {
+            Message::UserauthSuccess(_) => Ok((/* nice */)),
+            Message::UserauthFailure(_) => Err(Error::AuthenticationFailure),
+            msg => {
+                log::error!("Expected UserauthSuccess, got {:?}", msg);
+                Err(Error::UnexpectedMessageType(msg.typ()))
+            },
+        }?;
         log::trace!("Got UserauthSuccess");
 
         Ok(Self {
@@ -242,6 +260,8 @@ impl Connection {
         })
     }
 
+    /// Gives access to the internal stream, allowing to change
+    /// its parameters
     pub fn mutate_stream<F: Fn(&mut TcpStream)>(&mut self, func: F) {
         func(self.reader.inner.get_mut())
     }

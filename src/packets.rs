@@ -1,7 +1,7 @@
 use core::ops::Range;
 use super::{
-    Result, Error, ErrorKind, U8, U32, Write, Read,
-    BufReader, BufWriter, Cipher, Hmac,
+    Result, Error, U8, U32, Write, BufReader,
+    BufWriter, Cipher, Hmac, ErrorKind, Read,
 };
 use super::StreamCipher;
 use super::messages::{MessageType, GlobalRequest};
@@ -87,12 +87,13 @@ impl<R: Read> PacketReader<R> {
                 hmac.update(packet);
 
                 if packet_hmac.len() != self.mac_size {
-                    let errmsg = format!("Incorrect Packet Mac Size ({})", packet_hmac.len());
-                    return Err(Error::new(ErrorKind::InvalidData, errmsg));
+                    log::error!("Incorrect Packet Mac Size ({})", packet_hmac.len());
+                    return Err(Error::InvalidData);
                 }
 
                 if packet_hmac != &hmac.finalize() {
-                    return Err(Error::new(ErrorKind::InvalidData, "Incorrect Packet Mac"));
+                    log::error!("Incorrect Packet Mac");
+                    return Err(Error::InvalidData);
                 }
             }
 
@@ -117,12 +118,17 @@ impl<R: Read> PacketReader<R> {
                 _ => Ok(&self.packet[range]),
             }
         } else {
-            Err(Error::new(ErrorKind::UnexpectedEof, "Invalid packet_length"))
+            log::error!("Invalid packet_length");
+            Err(Error::InvalidData)
         }
     }
 
     pub fn recv<'a, 'b: 'a, M: ParseDump<'a>>(&'b mut self) -> Result<M> {
-        M::parse(self.recv_raw()?).map(|(m, _)| m)
+        M::parse(match self.recv_raw() {
+            Ok(bytes) => Ok(bytes),
+            Err(Error::TcpError(ErrorKind::WouldBlock | ErrorKind::TimedOut)) => Err(Error::Timeout),
+            Err(e) => Err(e),
+        }?).map(|(m, _)| m)
     }
 }
 
@@ -150,7 +156,7 @@ impl<W: Write> PacketWriter<W> {
         self.block_size = block_size;
     }
 
-    pub fn send<'a, M: ParseDump<'a>>(&mut self, message: &M) -> Result<()> {
+    fn send_raw<'a, M: ParseDump<'a>>(&mut self, message: &M) -> Result<()> {
         self.packet.clear();
         // make room for packet_length & padding_length
         self.packet.resize(U32 + U8, 0);
@@ -189,6 +195,16 @@ impl<W: Write> PacketWriter<W> {
         self.packet_number = self.packet_number.wrapping_add(1);
 
         self.inner.write_all(&self.packet)?;
-        self.inner.flush()
+        self.inner.flush()?;
+
+        Ok(())
+    }
+
+    pub fn send<'a, M: ParseDump<'a>>(&mut self, message: &M) -> Result<()> {
+        match self.send_raw(message) {
+            Ok(()) => Ok(()),
+            Err(Error::TcpError(ErrorKind::WouldBlock | ErrorKind::TimedOut)) => Err(Error::Timeout),
+            Err(e) => Err(e),
+        }
     }
 }

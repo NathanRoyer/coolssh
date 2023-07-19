@@ -2,7 +2,7 @@ use core::str::from_utf8;
 use super::{Result, Error, ErrorKind, U8, U32, Write};
 
 pub (crate) fn too_short() -> Error {
-    Error::new(ErrorKind::UnexpectedEof, "Missing Bytes / Input Too Short")
+    Error::TcpError(ErrorKind::UnexpectedEof)
 }
 
 pub trait ParseDump<'b>: Sized {
@@ -80,7 +80,7 @@ impl<'b> ParseDump<'b> for bool {
     }
 
     fn dump<W: Write>(&self, sink: &mut W) -> Result<()> {
-        sink.write(&[*self as u8]).map(|_| ())
+        Ok(sink.write(&[*self as u8]).map(|_| ())?)
     }
 }
 
@@ -90,7 +90,7 @@ impl<'b> ParseDump<'b> for u8 {
     }
 
     fn dump<W: Write>(&self, sink: &mut W) -> Result<()> {
-        sink.write(&[*self]).map(|_| ())
+        Ok(sink.write(&[*self]).map(|_| ())?)
     }
 }
 
@@ -100,7 +100,7 @@ impl<'b> ParseDump<'b> for u32 {
     }
 
     fn dump<W: Write>(&self, sink: &mut W) -> Result<()> {
-        sink.write(&self.to_be_bytes()).map(|_| ())
+        Ok(sink.write(&self.to_be_bytes()).map(|_| ())?)
     }
 }
 
@@ -110,7 +110,7 @@ impl<'b> ParseDump<'b> for [u8; 16] {
     }
 
     fn dump<W: Write>(&self, sink: &mut W) -> Result<()> {
-        sink.write(&*self).map(|_| ())
+        Ok(sink.write(&*self).map(|_| ())?)
     }
 }
 
@@ -122,16 +122,14 @@ impl<'a, 'b: 'a> ParseDump<'b> for &'a [u8] {
 
     fn dump<W: Write>(&self, sink: &mut W) -> Result<()> {
         sink.write(&(self.len() as u32).to_be_bytes())?;
-        sink.write(self).map(|_| ())
+        Ok(sink.write(self).map(|_| ())?)
     }
 }
 
 impl<'a, 'b: 'a> ParseDump<'b> for &'a str {
     fn parse(bytes: &'b [u8]) -> Result<(Self, usize)> {
         let (slice, progress) = <&'a [u8]>::parse(bytes)?;
-        Ok((from_utf8(slice).map_err(|e| {
-            Error::new(ErrorKind::InvalidData, e)
-        })?, progress))
+        Ok((from_utf8(slice).map_err(|_| Error::InvalidData)?, progress))
     }
 
     fn dump<W: Write>(&self, sink: &mut W) -> Result<()> {

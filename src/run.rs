@@ -1,4 +1,4 @@
-use super::{Connection, ErrorKind, Result, Error};
+use super::{Connection, Result, Error};
 use super::messages::{
     ChannelOpen, ChannelOpenConfirmation, ChannelRequest, ChannelClose,
     ChannelData, Message, ChannelExtendedData,
@@ -47,8 +47,8 @@ impl Connection {
             })),
             Message::ChannelFailure(_) => Ok(RunResult::Refused),
             msg => {
-                let err_msg = format!("Unexpected message: {:#?}", msg);
-                return Err(Error::new(ErrorKind::InvalidData, err_msg));
+                log::error!("Unexpected message: {:#?}", msg);
+                return Err(Error::UnexpectedMessageType(msg.typ()));
             },
         }
     }
@@ -88,8 +88,8 @@ impl Connection {
             RunResult::Accepted((None, _)) => unreachable!(),
             RunResult::Accepted((Some(bytes), status)) => {
                 RunResult::Accepted((String::from_utf8(bytes).map_err(|_| {
-                    let errmsg = "Non-UTF-8 bytes in command output";
-                    Error::new(ErrorKind::InvalidData, errmsg)
+                    log::error!("Non-UTF-8 bytes in command output");
+                    Error::InvalidData
                 })?, status))
             },
         })
@@ -107,10 +107,13 @@ impl Connection {
 #[derive(Debug)]
 pub struct Run<'a> {
     conn: &'a mut Connection,
-    server_channel: u32,
-    client_channel: u32,
     exit_status: Option<ExitStatus>,
     closed: bool,
+    server_channel: u32,
+
+    // todo: check it in incoming messages
+    #[allow(dead_code)]
+    client_channel: u32,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -125,10 +128,8 @@ impl<'a> Run<'a> {
     pub fn poll(&mut self) -> Result<RunEvent> {
         let message = match self.conn.reader.recv() {
             Ok(message) => message,
-            Err(e) => return match e.kind() {
-                ErrorKind::WouldBlock | ErrorKind::TimedOut => Ok(RunEvent::None),
-                _ => Err(e),
-            },
+            Err(Error::Timeout) => return Ok(RunEvent::None),
+            Err(e) => return Err(e),
         };
 
         match message {
@@ -159,8 +160,8 @@ impl<'a> Run<'a> {
                 data,
             }) => Ok(RunEvent::ExtDataStdout(data)),
             msg => {
-                let err_msg = format!("Unexpected message: {:#?}", msg);
-                return Err(Error::new(ErrorKind::InvalidData, err_msg));
+                log::error!("Unexpected message: {:#?}", msg);
+                return Err(Error::UnexpectedMessageType(msg.typ()));
             },
         }
     }
@@ -171,7 +172,7 @@ impl<'a> Run<'a> {
                 recipient_channel: self.server_channel,
                 data,
             }),
-            true => Err(Error::new(ErrorKind::BrokenPipe, "Process has already exited")),
+            true => Err(Error::ProcessHasExited),
         }
     }
 }

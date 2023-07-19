@@ -29,6 +29,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "block-buffer"
+version = "0.10.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71"
+dependencies = [
+ "generic-array",
+]
+
+[[package]]
 name = "byteorder"
 version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -52,15 +61,15 @@ dependencies = [
 
 [[package]]
 name = "coolssh"
-version = "1.0.0"
+version = "1.0.2"
 dependencies = [
  "aes",
  "base64",
  "ctr",
  "ed25519-dalek",
- "hmac-sha256",
  "log",
  "rand_core",
+ "sha2 0.10.7",
  "x25519-dalek",
 ]
 
@@ -99,7 +108,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "90f9d052967f590a76e62eb387bd0bbb1b000182c3cefe5364db6b7211651bc0"
 dependencies = [
  "byteorder",
- "digest",
+ "digest 0.9.0",
  "rand_core",
  "subtle",
  "zeroize",
@@ -112,6 +121,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3dd60d1080a57a05ab032377049e0591415d2b31afd7028356dbf3cc6dcb066"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "digest"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
+dependencies = [
+ "block-buffer 0.10.4",
+ "crypto-common",
 ]
 
 [[package]]
@@ -133,7 +152,7 @@ dependencies = [
  "ed25519",
  "rand",
  "serde",
- "sha2",
+ "sha2 0.9.9",
  "zeroize",
 ]
 
@@ -157,12 +176,6 @@ dependencies = [
  "libc",
  "wasi",
 ]
-
-[[package]]
-name = "hmac-sha256"
-version = "1.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3688e69b38018fec1557254f64c8dc2cc8ec502890182f395dbb0aa997aa5735"
 
 [[package]]
 name = "inout"
@@ -268,11 +281,22 @@ version = "0.9.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4d58a1e1bf39749807d89cf2d98ac2dfa0ff1cb3faa38fbb64dd88ac8013d800"
 dependencies = [
- "block-buffer",
+ "block-buffer 0.9.0",
  "cfg-if",
  "cpufeatures",
- "digest",
+ "digest 0.9.0",
  "opaque-debug",
+]
+
+[[package]]
+name = "sha2"
+version = "0.10.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "479fb9d862239e610720565ca91403019f2f00410f1864c5aa7479b950a76ed8"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest 0.10.7",
 ]
 
 [[package]]

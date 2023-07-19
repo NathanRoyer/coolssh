@@ -1,4 +1,4 @@
-use super::{Result, Error, ErrorKind, U8, Write};
+use super::{Result, Error, U8, Write};
 use super::parsedump::ParseDump;
 use super::messages::MessageType;
 use super::check_msg_type;
@@ -46,8 +46,8 @@ impl<'a, 'b: 'a> ParseDump<'b> for ChannelRequest<'a> {
             },
             "exit-status" => {
                 if want_reply {
-                    let errmsg = "\"exit-status\" Channel Request with want_reply=true";
-                    return Err(Error::new(ErrorKind::InvalidData, errmsg));
+                    log::error!("\"exit-status\" Channel Request with want_reply=true");
+                    return Err(Error::InvalidData);
                 }
 
                 let (exit_status, inc) = u32::parse(&bytes[i..])?;
@@ -90,8 +90,8 @@ impl<'a, 'b: 'a> ParseDump<'b> for ChannelRequest<'a> {
                 exit_status.dump(sink)?;
             },
             Self::Other { .. } => {
-                let errmsg = "ChannelRequest::Other has no binary representation";
-                return Err(Error::new(ErrorKind::Unsupported, errmsg));
+                log::error!("ChannelRequest::Other has no binary representation (coolssh programmer error)");
+                return Err(Error::InvalidData);
             },
         }
 
