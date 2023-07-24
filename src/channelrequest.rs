@@ -10,6 +10,12 @@ pub enum ChannelRequest<'a> {
         want_reply: bool,
         command: &'a str,
     },
+    EnvironmentVariable {
+        recipient_channel: u32,
+        want_reply: bool,
+        name: &'a str,
+        value: &'a str,
+    },
     ExitStatus {
         recipient_channel: u32,
         exit_status: u32,
@@ -42,6 +48,20 @@ impl<'a, 'b: 'a> ParseDump<'b> for ChannelRequest<'a> {
                     recipient_channel,
                     want_reply,
                     command,
+                }, i))
+            },
+            "env" => {
+                let (name, inc) = <&'a str>::parse(&bytes[i..])?;
+                i += inc;
+
+                let (value, inc) = <&'a str>::parse(&bytes[i..])?;
+                i += inc;
+
+                Ok((Self::EnvironmentVariable {
+                    recipient_channel,
+                    want_reply,
+                    name,
+                    value,
                 }, i))
             },
             "exit-status" => {
@@ -88,6 +108,18 @@ impl<'a, 'b: 'a> ParseDump<'b> for ChannelRequest<'a> {
                 "exit-status".dump(sink)?;
                 false.dump(sink)?;
                 exit_status.dump(sink)?;
+            },
+            Self::EnvironmentVariable {
+                recipient_channel,
+                want_reply,
+                name,
+                value,
+            } => {
+                recipient_channel.dump(sink)?;
+                "env".dump(sink)?;
+                want_reply.dump(sink)?;
+                name.dump(sink)?;
+                value.dump(sink)?;
             },
             Self::Other { .. } => {
                 log::error!("ChannelRequest::Other has no binary representation (coolssh programmer error)");

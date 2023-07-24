@@ -13,7 +13,7 @@ pub enum RunResult<T: core::fmt::Debug> {
 }
 
 impl Connection {
-    pub fn run(&mut self, command: &str) -> Result<RunResult<Run>> {
+    pub fn run(&mut self, command: &str, env: &[(&str, &str)]) -> Result<RunResult<Run>> {
         let client_channel = self.next_client_channel;
         self.next_client_channel += 1;
 
@@ -30,6 +30,15 @@ impl Connection {
             server_initial_window_size: _,
             server_max_packet_size: _,
         } = self.reader.recv()?;
+
+        for (name, value) in env {
+            self.writer.send(&ChannelRequest::EnvironmentVariable {
+                recipient_channel: server_channel,
+                want_reply: false,
+                name,
+                value,
+            })?;
+        }
 
         self.writer.send(&ChannelRequest::Exec {
             recipient_channel: server_channel,
@@ -54,7 +63,7 @@ impl Connection {
     }
 
     fn quick_run_internal(&mut self, command: &str, get_output: bool) -> Result<RunResult<(Option<Vec<u8>>, Option<ExitStatus>)>> {
-        match self.run(command)? {
+        match self.run(command, &[])? {
             RunResult::Refused => Ok(RunResult::Refused),
             RunResult::Accepted(mut run) => {
                 let mut output = match get_output {
@@ -66,7 +75,7 @@ impl Connection {
                     match run.poll()? {
                         RunEvent::None => std::thread::sleep(std::time::Duration::from_millis(10)),
                         RunEvent::Data(data) => { output.as_mut().map(|o| o.extend_from_slice(data)); },
-                        RunEvent::ExtDataStdout(data) => { output.as_mut().map(|o| o.extend_from_slice(data)); },
+                        RunEvent::ExtDataStderr(data) => { output.as_mut().map(|o| o.extend_from_slice(data)); },
                         RunEvent::Stopped(exit_status) => return Ok(RunResult::Accepted((output, exit_status))),
                     }
                 }
@@ -120,7 +129,7 @@ pub struct Run<'a> {
 pub enum RunEvent<'a> {
     None,
     Data(&'a [u8]),
-    ExtDataStdout(&'a [u8]),
+    ExtDataStderr(&'a [u8]),
     Stopped(Option<ExitStatus>),
 }
 
@@ -158,7 +167,7 @@ impl<'a> Run<'a> {
                 recipient_channel: _,
                 data_type: 1,
                 data,
-            }) => Ok(RunEvent::ExtDataStdout(data)),
+            }) => Ok(RunEvent::ExtDataStderr(data)),
             msg => {
                 log::error!("Unexpected message: {:#?}", msg);
                 return Err(Error::UnexpectedMessageType(msg.typ()));
