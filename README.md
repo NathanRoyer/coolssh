@@ -36,7 +36,6 @@ let run = conn.run("git-upload-pack rust-lang/rust.git").unwrap();
 ### Future improvements
 
 - no_std compatibility
-- allow receiving more than 4GiB by sending SSH_MSG_CHANNEL_WINDOW_ADJUST when appropriate
 - allow multiple commands to run simultaneously (API change)
 - server mode
 

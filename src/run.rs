@@ -1,10 +1,14 @@
 use super::{Connection, Result, Error};
 use super::messages::{
     ChannelOpen, ChannelOpenConfirmation, ChannelRequest, ChannelClose,
-    ChannelData, Message, ChannelExtendedData,
+    ChannelData, Message, ChannelExtendedData, ChannelWindowAdjust,
 };
 
 pub type ExitStatus = u32;
+
+const CLIENT_INITIAL_WINDOW_SIZE: u32 = u32::MAX;
+const CLIENT_WIN_TELL_TRIGGER: u32 = CLIENT_INITIAL_WINDOW_SIZE / 4;
+const CLIENT_MAX_PACKET_SIZE: u32 = 64 * 0x1000;
 
 #[derive(Debug)]
 pub enum RunResult<T: core::fmt::Debug> {
@@ -20,15 +24,15 @@ impl Connection {
         self.writer.send(&ChannelOpen {
             channel_type: "session",
             client_channel,
-            client_initial_window_size: u32::MAX,
-            client_max_packet_size: 64 * 0x1000,
+            client_initial_window_size: CLIENT_INITIAL_WINDOW_SIZE,
+            client_max_packet_size: CLIENT_MAX_PACKET_SIZE,
         })?;
 
         let ChannelOpenConfirmation {
             client_channel: _,
             server_channel,
-            server_initial_window_size: _,
-            server_max_packet_size: _,
+            server_initial_window_size,
+            server_max_packet_size,
         } = self.reader.recv()?;
 
         for (name, value) in env {
@@ -53,6 +57,10 @@ impl Connection {
                 client_channel,
                 exit_status: None,
                 closed: false,
+
+                client_window: CLIENT_INITIAL_WINDOW_SIZE as _,
+                server_window: server_initial_window_size as _,
+                server_max_packet_size: server_max_packet_size as _,
             })),
             Message::ChannelFailure(_) => Ok(RunResult::Refused),
             msg => {
@@ -119,6 +127,9 @@ pub struct Run<'a> {
     exit_status: Option<ExitStatus>,
     closed: bool,
     server_channel: u32,
+    server_max_packet_size: usize,
+    server_window: usize,
+    client_window: usize,
 
     // todo: check it in incoming messages
     #[allow(dead_code)]
@@ -145,7 +156,26 @@ impl<'a> Run<'a> {
             Message::ChannelData(ChannelData {
                 recipient_channel: _,
                 data,
-            }) => Ok(RunEvent::Data(data)),
+            }) => {
+                self.client_window -= data.len();
+                let cw = self.client_window as u32;
+                if cw < CLIENT_WIN_TELL_TRIGGER {
+                    self.conn.writer.send(&ChannelWindowAdjust {
+                        recipient_channel: self.server_channel,
+                        bytes_to_add: CLIENT_INITIAL_WINDOW_SIZE - cw,
+                    })?;
+
+                    self.client_window = CLIENT_INITIAL_WINDOW_SIZE as _;
+                }
+                Ok(RunEvent::Data(data))
+            },
+            Message::ChannelWindowAdjust(ChannelWindowAdjust {
+                recipient_channel: _,
+                bytes_to_add,
+            }) => {
+                self.server_window += bytes_to_add as usize;
+                Ok(RunEvent::None)
+            },
             Message::ChannelEof(_) => Ok(RunEvent::None),
             Message::ChannelClose(_) => {
                 self.conn.writer.send(&ChannelClose {
@@ -175,14 +205,59 @@ impl<'a> Run<'a> {
         }
     }
 
-    pub fn write(&mut self, data: &[u8]) -> Result<()> {
-        match self.closed {
-            false => self.conn.writer.send(&ChannelData {
-                recipient_channel: self.server_channel,
-                data,
-            }),
-            true => Err(Error::ProcessHasExited),
+    /// Tries to send `data` over the run channel and calls `event_callback`
+    /// if an event occurs during the transmission.
+    ///
+    /// Use this if the protocol you're using is full-duplex.
+    pub fn write_poll<WPE: From<Error>, F: FnMut(RunEvent) -> core::result::Result<(), WPE>>(
+        &mut self,
+        mut data: &[u8],
+        mut event_callback: F,
+    ) -> core::result::Result<(), WPE> {
+        if self.closed {
+            return Err(Error::ProcessHasExited.into());
         }
+
+        loop {
+            let step = self.server_max_packet_size.min(self.server_window);
+            if step >= data.len() {
+                self.conn.writer.send(&ChannelData {
+                    recipient_channel: self.server_channel,
+                    data,
+                })?;
+
+                self.server_window -= data.len();
+
+                break Ok(())
+            } else if step > 0 {
+                let (sendable, next) = data.split_at(step);
+
+                self.conn.writer.send(&ChannelData {
+                    recipient_channel: self.server_channel,
+                    data: sendable,
+                })?;
+
+                self.server_window -= step;
+                data = next;
+            }
+
+            match self.poll()? {
+                RunEvent::None => (),
+                e => event_callback(e)?,
+            }
+        }
+    }
+
+    /// Tries to send `data` over the run channel and returns the `on_event` error
+    /// if an event occurs during the transmission.
+    ///
+    /// Use this if the protocol you're using is half-duplex.
+    pub fn write<WPE: From<Error>>(&mut self, data: &[u8], on_event: WPE) -> core::result::Result<(), WPE> {
+        let mut on_event = Some(on_event);
+        self.write_poll(data, |data| {
+            log::error!("Unexpected RunEvent in Run::write(): {:?}", data);
+            Err(on_event.take().unwrap())
+        })
     }
 }
 

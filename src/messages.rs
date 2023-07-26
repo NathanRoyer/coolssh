@@ -44,7 +44,7 @@ pub enum Message<'a> {
     ChannelOpen(ChannelOpen<'a>),
     ChannelOpenConfirmation(ChannelOpenConfirmation),
     ChannelOpenFailure(ChannelOpenFailure<'a>),
-    ChannelWindowAdjust,
+    ChannelWindowAdjust(ChannelWindowAdjust),
     ChannelData(ChannelData<'a>),
     ChannelExtendedData(ChannelExtendedData<'a>),
     ChannelEof(ChannelEof),
@@ -165,6 +165,11 @@ parse_dump_struct!(GlobalRequest<'a> {
     want_reply: bool,
 });
 
+parse_dump_struct!(ChannelWindowAdjust {
+    recipient_channel: u32,
+    bytes_to_add: u32,
+});
+
 // utils, not messages:
 
 parse_dump_struct!(ExchangeHash<'a> {
@@ -211,6 +216,7 @@ impl<'a, 'b: 'a> ParseDump<'b> for Message<'a> {
             MessageType::ChannelData => forward_and_wrap!(ChannelData, bytes),
             MessageType::ChannelExtendedData => forward_and_wrap!(ChannelExtendedData, bytes),
             MessageType::ChannelEof => forward_and_wrap!(ChannelEof, bytes),
+            MessageType::ChannelWindowAdjust => forward_and_wrap!(ChannelWindowAdjust, bytes),
             MessageType::ChannelClose => forward_and_wrap!(ChannelClose, bytes),
             MessageType::ChannelSuccess => forward_and_wrap!(ChannelSuccess, bytes),
             MessageType::ChannelFailure => forward_and_wrap!(ChannelFailure, bytes),
@@ -245,6 +251,7 @@ impl<'a, 'b: 'a> ParseDump<'b> for Message<'a> {
             Self::ChannelData(inner) => inner.dump(sink),
             Self::ChannelExtendedData(inner) => inner.dump(sink),
             Self::ChannelEof(inner) => inner.dump(sink),
+            Self::ChannelWindowAdjust(inner) => inner.dump(sink),
             Self::ChannelClose(inner) => inner.dump(sink),
             Self::ChannelSuccess(inner) => inner.dump(sink),
             Self::ChannelFailure(inner) => inner.dump(sink),
@@ -282,7 +289,7 @@ impl<'a> Message<'a> {
             Self::ChannelOpen(_) => MessageType::ChannelOpen,
             Self::ChannelOpenConfirmation(_) => MessageType::ChannelOpenConfirmation,
             Self::ChannelOpenFailure(_) => MessageType::ChannelOpenFailure,
-            Self::ChannelWindowAdjust => MessageType::ChannelWindowAdjust,
+            Self::ChannelWindowAdjust(_) => MessageType::ChannelWindowAdjust,
             Self::ChannelData(_) => MessageType::ChannelData,
             Self::ChannelExtendedData(_) => MessageType::ChannelExtendedData,
             Self::ChannelEof(_) => MessageType::ChannelEof,
