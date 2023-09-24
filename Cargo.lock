@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "coolssh"
-version = "1.0.2"
+version = "1.2.0"
 dependencies = [
  "aes",
  "base64",

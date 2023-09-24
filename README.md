@@ -4,17 +4,19 @@ Pure-rust SSH 2.0 Client
 
 ```rust
 use std::net::TcpStream;
-use coolssh::{create_ed25519_keypair, Connection};
+use coolssh::{create_ed25519_keypair, dump_ed25519_pk_openssh, Connection};
+
+let hex_keypair: String = create_ed25519_keypair();
+println!("Key Pair (private): {}", hex_keypair);
 
 let github_account_id = "john.doe@gmail.com";
-let (openssh_encoded_pubkey, keypair) = create_ed25519_keypair(github_account_id);
-
-println!("{}", openssh_encoded_pubkey);
-// Add this public key to `authorized_keys` on your server
+let openssh_encoded_pubkey = dump_ed25519_pk_openssh(&hex_keypair, github_account_id);
+println!("OpenSSH-Encoded Public Key {}", openssh_encoded_pubkey);
+// Add the public key to `authorized_keys` on your server
 // -> https://github.com/settings/keys
 
 let stream = TcpStream::connect("github.com:22").unwrap();
-let mut conn = Connection::new(stream, ("git", &keypair).into()).unwrap();
+let mut conn = Connection::new(stream, ("git", hex_keypair.as_str()).into()).unwrap();
 
 // set appropriate read timeout (preferably after authentication):
 conn.mutate_stream(|stream| {
@@ -22,7 +24,8 @@ conn.mutate_stream(|stream| {
     stream.set_read_timeout(Some(timeout)).unwrap()
 });
 
-let run = conn.run("git-upload-pack rust-lang/rust.git").unwrap();
+let env = [];
+let run = conn.run("git-upload-pack rust-lang/rust.git", &env).unwrap();
 ```
 
 ### Supported SSH Algorithms

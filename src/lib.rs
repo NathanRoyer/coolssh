@@ -7,7 +7,7 @@ use core::mem::size_of;
 use rand_core::OsRng as Rng;
 use aes::cipher::{KeyIvInit, StreamCipher};
 use hmac::Hmac;
-use ed25519_dalek::{Verifier, Signer};
+use ed25519_dalek::{Keypair, Verifier, Signer};
 
 type Cipher = ctr::Ctr64BE<aes::Aes256>;
 
@@ -23,13 +23,14 @@ mod messages;
 mod packets;
 mod run;
 mod hmac;
+mod keygen;
 
 #[doc(inline)]
 pub use {
     connection::{Connection, Auth},
     run::{Run, RunResult, RunEvent, ExitStatus},
-    ed25519_dalek::Keypair,
     messages::MessageType,
+    keygen::{create_ed25519_keypair, dump_ed25519_pk_openssh},
 };
 
 fn sha256<'b, P: parsedump::ParseDump<'b>>(data: &P) -> Result<[u8; 32]> {
@@ -50,34 +51,6 @@ fn sha256<'b, P: parsedump::ParseDump<'b>>(data: &P) -> Result<[u8; 32]> {
     Ok(hasher.0.finalize().into())
 }
 
-#[cfg(feature = "dump")]
-pub fn dump_ed25519_pub(ed25519_pub: &[u8], username: &str) -> String {
-    use base64::{Engine as _, engine::general_purpose::STANDARD_NO_PAD};
-    use parsedump::ParseDump;
-    use std::io::Cursor;
-
-    let mut dumped = [0; ed25519_blob_len(32) as _];
-
-    let mut cursor = Cursor::new(&mut dumped[..]);
-    "ssh-ed25519".dump(&mut cursor).unwrap();
-    ed25519_pub.dump(&mut cursor).unwrap();
-
-    let mut encoded = "ssh-ed25519 ".into();
-    STANDARD_NO_PAD.encode_string(dumped, &mut encoded);
-    encoded += " ";
-    encoded += username;
-    encoded += "\n";
-    encoded
-}
-
-#[cfg(feature = "dump")]
-pub fn create_ed25519_keypair(username: &str) -> (String, Keypair) {
-    let mut csprng = Rng;
-    let keypair = Keypair::generate(&mut csprng);
-    let ed25519_pub = keypair.public.as_bytes();
-    (dump_ed25519_pub(ed25519_pub, username), keypair)
-}
-
 pub(crate) const fn ed25519_blob_len(content_len: u32) -> u32 {
     4 + 11 + 4 + content_len
 }
@@ -91,8 +64,8 @@ pub enum Error {
     TcpError(ErrorKind),
     /// Invalid data type/encoding/size
     InvalidData,
-    /// Authentication failure
     AuthenticationFailure,
+    InvalidKeypair,
     ProcessHasExited,
     UnexpectedMessageType(MessageType),
     UnknownMessageType(u8),

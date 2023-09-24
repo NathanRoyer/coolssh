@@ -9,6 +9,7 @@ use super::messages::{
     Kexinit, KexdhInit, KexdhReply, ExchangeHash, Newkeys, Message,
 };
 use super::parsedump::ParseDump;
+use super::keygen::decode_hex;
 use super::packets::{PacketReader, PacketWriter};
 
 pub enum Auth<'a> {
@@ -18,7 +19,8 @@ pub enum Auth<'a> {
     },
     Ed25519 {
         username: &'a str,
-        keypair: &'a Keypair,
+        /// 128-character hex-encoded keypair
+        hex_keypair: &'a str,
     }
 }
 
@@ -197,9 +199,13 @@ impl Connection {
             },
             Auth::Ed25519 {
                 username,
-                keypair,
+                hex_keypair,
             } => {
                 let algorithm = "ssh-ed25519";
+                let keypair = {
+                    let bytes: [u8; 64] = decode_hex(hex_keypair).ok_or(Error::InvalidKeypair)?;
+                    Keypair::from_bytes(&bytes).ok().ok_or(Error::InvalidKeypair)?
+                };
 
                 let ed25519_pub = Blob {
                     blob_len: ed25519_blob_len(32),
@@ -226,7 +232,7 @@ impl Connection {
                 }?;
                 log::trace!("Got UserauthPkOk");
 
-                let signature = sign_userauth(keypair, &session_id, username, service_name, &ed25519_pub)?;
+                let signature = sign_userauth(&keypair, &session_id, username, service_name, &ed25519_pub)?;
 
                 writer.send(&UserauthRequest::PublicKey {
                     username,
@@ -338,12 +344,12 @@ impl KeyExchangeOutput {
     }
 }
 
-impl<'a> From<(&'a str, &'a Keypair)> for Auth<'a> {
-    fn from(tuple: (&'a str, &'a Keypair)) -> Auth<'a> {
-        let (username, keypair) = tuple;
+impl<'a> From<(&'a str, &'a str)> for Auth<'a> {
+    fn from(tuple: (&'a str, &'a str)) -> Auth<'a> {
+        let (username, hex_keypair) = tuple;
         Self::Ed25519 {
             username,
-            keypair,
+            hex_keypair,
         }
     }
 }
